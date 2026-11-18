@@ -36,7 +36,11 @@ def exact_stratified(strata):
     mean = sum(k * p for k, p in dist.items())
     dev = abs(observed - mean) - 1e-9
     p = sum(pr for k, pr in dist.items() if abs(k - mean) >= dev)
-    return _result(usable, lift, p)
+    out = _result(usable, lift, p)
+    # Which side of "no effect" the evidence is on, from the test itself (the weighted lift can
+    # disagree in sign when strata are very unbalanced).
+    out["direction"] = observed - mean
+    return out
 
 
 def _result(usable, lift, p):

@@ -93,9 +93,10 @@ export interface Results {
     stage: string; label: string; accounts: number; advance_rate: number | null; judged: number | null; value: number;
     pipeline: number; started_by_marketing: number; touched_by_marketing: number; caused_by_marketing: number; won: number;
     account_ids: string[]; judged_ids: string[];
+    pipeline_ids: string[]; started_ids: string[]; touched_ids: string[]; caused_ids: string[]; won_ids: string[];
   }[];
   steps: Step[];
-  sourced_by_channel: { channel: string; accounts: number; opportunities: number; pipeline: number; won: number; account_ids: string[] }[];
-  gaps: { account_id: string; name: string; segment: string; stage: string; step: string; missing_role: string; days_at_stage: number }[];
+  sourced_by_channel: { channel: string; accounts: number; opportunities: number; pipeline: number; won: number; account_ids: string[]; opportunity_ids?: string[] }[];
+  gaps: { account_id: string; name: string; segment: string; stage: string; step: string; missing_role: string; days_at_stage: number; stalled: boolean }[];
   accounts: Account[];
 }

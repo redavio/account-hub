@@ -164,7 +164,7 @@ def analyze(tables, settings=None):
                    and (wait is None or a["dates"][st] + timedelta(days=wait) <= as_of)]
         value[st] = (sum(1 for a in matured if a["dates"]["opportunity"]) / len(matured) * avg_opp) if matured else 0.0
 
-    headline = _headline(accounts, steps, non_mkt, s)
+    headline = _headline(accounts, steps, non_mkt, s, windows, as_of, history_start)
 
     # One Holm correction across every test in the report: channels, roles, and holdout tests.
     tests = [(stp, r) for stp in steps for r in stp["incremental"]["channels"] + stp["incremental"]["roles"]]
@@ -176,7 +176,7 @@ def analyze(tables, settings=None):
         r["p_adjusted"] = pa
         enough, more = sample_check(r["lift"], r["rate_control"], r["n_exposed"], r["n_control"], s["alpha"] / m, s["power"])
         n_now = stp["eligible"] if stp else r["n_exposed"] + r["n_control"]
-        r["status"] = _status(pa, r["lift"], enough, more, n_now, s)
+        r["status"] = _status(pa, r.get("direction", r["lift"]), enough, more, n_now, s)
         r["more_accounts_needed"] = more if r["status"] == "not enough data yet" else 0
         r["extra_advances"] = r["lift"] * r["n_exposed"] if r["status"] == "lift" else 0.0
         if stp and "role" in r and r["status"] == "lift":
@@ -200,6 +200,8 @@ def analyze(tables, settings=None):
     caused_into = {stp["to"]: sum(r["value"] for r in stp["incremental"]["channels"] if r["channel"] not in non_mkt)
                    for stp in steps}
     touched_ids = headline["touched_by_marketing"]["account_ids_any"]
+    caused_ids = {stp["to"]: sorted({i for r in stp["incremental"]["channels"] if r["channel"] not in non_mkt and r["status"] == "lift" for i in r["exposed_ids"]})
+                  for stp in steps}
     funnel = []
     for st in STAGES:
         reached = [a for a in accounts.values() if a["dates"][st]]
@@ -215,6 +217,11 @@ def analyze(tables, settings=None):
             "won": sum(a["won"] for a in reached),
             "account_ids": [a["id"] for a in reached],
             "judged_ids": [r["account_id"] for r in stp["accounts"]] if stp else [],
+            "pipeline_ids": [a["id"] for a in reached if a["pipeline"]],
+            "started_ids": [a["id"] for a in reached if a["pipeline"] and a["source"] and a["source"] not in non_mkt],
+            "touched_ids": [a["id"] for a in reached if a["pipeline"] and a["id"] in touched_ids],
+            "caused_ids": caused_ids.get(st, []),
+            "won_ids": [a["id"] for a in reached if a["won"]],
         })
 
     sourced = {}
@@ -227,8 +234,12 @@ def analyze(tables, settings=None):
             row["pipeline"] += a["pipeline"]
             row["won"] += a["won"]
             row["account_ids"].append(a["id"])
+            if a["dates"]["opportunity"]:
+                row.setdefault("opportunity_ids", []).append(a["id"])
 
-    gaps = _gaps(accounts, touches, s, as_of)
+    open_deal = {d["account_id"] for d in tables.get("deals", []) if d.get("status") in ("open", "won")}
+    lost = {a["id"] for a in accounts.values() if a["dates"]["opportunity"] and a["id"] not in open_deal}
+    gaps = _gaps(accounts, touches, s, as_of, windows, lost)
     del headline["_holdout_test"]
     headline["touched_by_marketing"].pop("account_ids_any")
     return {
@@ -373,14 +384,14 @@ def _step(frm, to, window, wsource, accounts, touches, s, as_of, history_start, 
             "suggested_key_roles": [], "accounts": rows}
 
 
-def _gaps(accounts, touches, s, as_of):
+def _gaps(accounts, touches, s, as_of, windows, lost):
     """Every target account still in play (not holdout, not yet won), at its current stage:
     the key roles for its next step that haven't engaged since it reached that stage. This is the
     to-do list the Activations tab works from."""
     out = []
     for a in sorted(accounts.values(), key=lambda a: a["name"]):
         cur = _current(a)
-        if a["holdout"] or cur in (None, "closed_won"):
+        if a["holdout"] or cur in (None, "closed_won") or a["id"] in lost:
             continue
         since = a["dates"][cur]
         engaged = {t["role"] for t in touches.get(a["id"], []) if t["kind"] == "engaged" and t["role"] and since <= t["date"] <= as_of}
@@ -389,7 +400,9 @@ def _gaps(accounts, touches, s, as_of):
             if role not in engaged:
                 out.append({"account_id": a["id"], "name": a["name"], "segment": a["segment"],
                             "stage": STAGE_LABELS[cur], "step": f"{STAGE_LABELS[cur]} → {STAGE_LABELS[nxt]}",
-                            "missing_role": role, "days_at_stage": (as_of - since).days})
+                            "missing_role": role, "days_at_stage": (as_of - since).days,
+                            # Past twice the usual time at this stage: likely stalled, worth a look first.
+                            "stalled": bool(windows.get(cur)) and (as_of - since).days > 2 * windows[cur]})
     return out
 
 
@@ -404,7 +417,7 @@ def _status(p, lift, enough, more, n, s):
     return "not enough data yet"
 
 
-def _headline(accounts, steps, non_mkt, s):
+def _headline(accounts, steps, non_mkt, s, windows, as_of, history_start):
     opp = [a for a in accounts.values() if a["dates"]["opportunity"]]
     won = [a for a in accounts.values() if a["dates"]["closed_won"]]
     sourced = [a for a in opp if a["source"] and a["source"] not in non_mkt]
@@ -412,17 +425,31 @@ def _headline(accounts, steps, non_mkt, s):
     # in that step's window.
     touched_any = {i for stp in steps if stp["to"] in ("hand_raiser", "sql", "opportunity") for i in stp["influenced"]["account_ids"]}
     touched = [a for a in opp if a["id"] in touched_any]
-    # Holdout: share of accounts that became an Opportunity, program vs holdout, exact, within segment.
+    # Holdout: did program accounts become Opportunities more often than holdout accounts? Only
+    # accounts the program could still act on count (they entered the funnel before SQL, inside the
+    # touch history), once every window up to Opportunity has passed; compared within segment x cohort.
     test = None
-    if any(a["holdout"] for a in accounts.values()) and any(not a["holdout"] for a in accounts.values()):
+    span = [windows[x] for x in ("nhr_lead", "hand_raiser", "sql")]
+    wait = sum(span) if all(span) else None
+    pool = []
+    for a in accounts.values():
+        entry = next((st for st in STAGES if a["dates"][st]), None)
+        if entry not in ("nhr_lead", "hand_raiser"):
+            continue
+        start = a["dates"][entry]
+        if start < history_start or (wait and start + timedelta(days=wait) > as_of):
+            continue
+        pool.append((a, start.strftime("%Y-%m")))
+    if any(a["holdout"] for a, _ in pool) and any(not a["holdout"] for a, _ in pool):
         strata = []
-        for g in sorted({a["segment"] for a in accounts.values()}):
-            ex = [a for a in accounts.values() if a["segment"] == g and not a["holdout"]]
-            co = [a for a in accounts.values() if a["segment"] == g and a["holdout"]]
-            strata.append((len(ex), sum(1 for a in ex if a["dates"]["opportunity"]), len(co), sum(1 for a in co if a["dates"]["opportunity"])))
+        for g in sorted({a["segment"] for a, _ in pool}):
+            for c in sorted({c for _, c in pool}):
+                ex = [a for a, k in pool if a["segment"] == g and k == c and not a["holdout"]]
+                co = [a for a, k in pool if a["segment"] == g and k == c and a["holdout"]]
+                strata.append((len(ex), sum(1 for a in ex if a["dates"]["opportunity"]), len(co), sum(1 for a in co if a["dates"]["opportunity"])))
         test = exact_stratified(strata)
         if test:
-            test["exposed_ids"] = [a["id"] for a in accounts.values() if not a["holdout"]]
+            test["exposed_ids"] = [a["id"] for a, _ in pool if not a["holdout"]]
     ids = lambda xs: [a["id"] for a in xs]
     return {
         "pipeline_total": sum(a["pipeline"] for a in opp), "won_total": sum(a["won"] for a in won),
@@ -450,5 +477,5 @@ def _finish_headline(h, steps, non_mkt, value):
     rows = [(stp, r) for stp in steps if stp["to"] in ("hand_raiser", "sql", "opportunity")
             for r in stp["incremental"]["channels"] if r["channel"] not in non_mkt and r["status"] == "lift"]
     total = sum(r["value"] for _, r in rows)
-    h["caused_by_marketing"] = {"pipeline": total, "label": "estimated", "status": "lift" if total > 0 else "no lift found",
+    h["caused_by_marketing"] = {"pipeline": total, "label": "estimated, steps added together", "status": "lift" if total > 0 else "no lift found",
                                 "holdout": None, "account_ids": sorted({i for _, r in rows for i in r["exposed_ids"]})}

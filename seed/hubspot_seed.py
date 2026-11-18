@@ -120,7 +120,7 @@ def reset(hs):
     for ev in hs.call("GET", "/marketing/v3/marketing-events", params={"limit": 100}).get("results", []):
         if str(ev.get("externalEventId", "")).startswith("account-hub-"):
             hs.call("DELETE", f"/marketing/v3/marketing-events/events/{ev['externalEventId']}",
-                    params={"externalAccountId": ev["externalAccountId"]})
+                    params={"externalAccountId": ev.get("externalAccountId") or "account-hub-demo"})
 
 
 def main():

@@ -24,7 +24,7 @@ Value is pipeline $: a stage is worth the share of its accounts that become an O
 
 The math, in short:
 - **Window.** Touches count from the day an account reaches a stage, for the number of days within which 80% of past advancing accounts advanced, and only before it advances. An account counts as advancing only if it advances within that window. Too little history: the sales cycle in settings; none: the whole time at the stage.
-- **Cohorts.** An account counts toward a step only once its window has passed, so recent accounts aren't read as failures, and every comparison holds the cohort (the month the account entered the stage) and the segment fixed.
+- **Cohorts.** An account counts toward a step only once its window has passed, so recent accounts aren't read as failures, and every comparison holds the cohort (the month the account entered the stage) and the segment fixed. The headline holdout test uses only accounts the program could still act on (they entered before SQL) once they've had time to reach Opportunity.
 - **No fixed minimum sample.** A sample-size check based on your own advance rate decides between "no lift found" and "not enough data yet, about N more accounts needed".
 - **One correction** (Holm) covers every test in the report, channels, roles and holdout tests together, so a false "lift" anywhere stays unlikely. The sample-size check uses the same corrected threshold.
 

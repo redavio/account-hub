@@ -115,7 +115,7 @@ function Headline({ res, show }: { res: Results; show: Show }) {
 function Funnel({ res, show }: { res: Results; show: Show }) {
   return (
     <section>
-      <p className="help">Value per account is pipeline $: the share of accounts at the stage that become an Opportunity, times the average Opportunity.</p>
+      <p className="help">Value per account is pipeline $: the share at the stage that become an Opportunity, times the average Opportunity. "Caused by marketing" here is estimated per channel; the headline card uses the holdout test when you have one.</p>
       <table>
         <thead>
           <tr>
@@ -130,12 +130,12 @@ function Funnel({ res, show }: { res: Results; show: Show }) {
               <td>{f.label}</td>
               <td><N ids={f.account_ids} title={f.label} show={show}>{f.accounts}</N></td>
               <td>{f.advance_rate === null ? "–" : <N ids={f.judged_ids} title={`${f.label}: accounts judged`} show={show} step={res.steps.find((s) => s.from === f.stage)?.step}>{pct(f.advance_rate)} ({f.judged})</N>}</td>
-              <td>{money(f.value)}</td>
-              <td>{money(f.pipeline)}</td>
-              <td>{money(f.started_by_marketing)}</td>
-              <td>{money(f.touched_by_marketing)}</td>
-              <td>{f.caused_by_marketing ? `${money(f.caused_by_marketing)} (estimated)` : "–"}</td>
-              <td>{money(f.won)}</td>
+              <td><N ids={f.account_ids} title={f.label} show={show}>{money(f.value)}</N></td>
+              <td><N ids={f.pipeline_ids} title={`${f.label}: with pipeline`} show={show}>{money(f.pipeline)}</N></td>
+              <td><N ids={f.started_ids} title={`${f.label}: started by marketing`} show={show}>{money(f.started_by_marketing)}</N></td>
+              <td><N ids={f.touched_ids} title={`${f.label}: touched by marketing`} show={show}>{money(f.touched_by_marketing)}</N></td>
+              <td>{f.caused_by_marketing ? <N ids={f.caused_ids} title={`${f.label}: exposed to channels with a lift`} show={show}>{money(f.caused_by_marketing)} (estimated)</N> : "–"}</td>
+              <td><N ids={f.won_ids} title={`${f.label}: won`} show={show}>{money(f.won)}</N></td>
             </tr>
           ))}
         </tbody>
@@ -233,8 +233,8 @@ function Grid({ res, show }: { res: Results; show: Show }) {
                       <td>{t.exposure}</td>
                       <td>{statusText(t)}</td>
                       <td>{pct(t.rate_exposed)} / {pct(t.rate_control)}</td>
-                      <td>{t.extra_advances ? t.extra_advances.toFixed(1) : "–"}</td>
-                      <td>{t.value ? money(t.value) : "–"}</td>
+                      <td>{t.extra_advances ? <N ids={t.exposed_ids} title={`${step.label}: ${name}, ${t.exposure}`} show={show} step={step.step}>{t.extra_advances.toFixed(1)}</N> : "–"}</td>
+                      <td>{t.value ? <N ids={t.exposed_ids} title={`${step.label}: ${name}, ${t.exposure}`} show={show} step={step.step}>{money(t.value)}</N> : "–"}</td>
                       <td>{t.cost_per_extra_advance ? money(t.cost_per_extra_advance) : t.status === "lift" && t.channel ? "no cost entered" : "–"}</td>
                     </tr>
                   );
@@ -251,7 +251,9 @@ function Grid({ res, show }: { res: Results; show: Show }) {
             {[...step.influenced.channels.map((c) => ({ ...c, name: c.channel })), ...step.influenced.roles.map((r) => ({ ...r, name: `${r.role} (role)` }))].map((c) => (
               <tr key={c.name}>
                 <td><N ids={c.account_ids} title={`${step.label}: touched by ${c.name}`} show={show} step={step.step}>{c.name}</N></td>
-                <td>{c.credited_advances.toFixed(1)}</td><td>{money(c.pipeline)}</td><td>{money(c.won)}</td>
+                {[c.credited_advances.toFixed(1), money(c.pipeline), money(c.won)].map((v, i) => (
+                  <td key={i}><N ids={c.account_ids} title={`${step.label}: touched by ${c.name}`} show={show} step={step.step}>{v}</N></td>
+                ))}
               </tr>
             ))}
           </tbody>
@@ -265,7 +267,9 @@ function Grid({ res, show }: { res: Results; show: Show }) {
               <tr key={c.channel}>
                 <td>{c.channel}</td>
                 <td><N ids={c.account_ids} title={`Started by ${c.channel}`} show={show}>{c.accounts}</N></td>
-                <td>{c.opportunities}</td><td>{money(c.pipeline)}</td><td>{money(c.won)}</td>
+                <td><N ids={c.opportunity_ids || []} title={`Started by ${c.channel}: opportunities`} show={show}>{c.opportunities}</N></td>
+                <td><N ids={c.opportunity_ids || []} title={`Started by ${c.channel}: opportunities`} show={show}>{money(c.pipeline)}</N></td>
+                <td>{money(c.won)}</td>
               </tr>
             ))}
           </tbody>
@@ -283,6 +287,7 @@ function Accounts({ res, pick, clear }: { res: Results; pick: Pick; clear: () =>
     res.gaps.forEach((g) => (m[g.account_id] ||= []).push(g.missing_role));
     return m;
   }, [res]);
+  const stalled = useMemo(() => new Set(res.gaps.filter((g) => g.stalled).map((g) => g.account_id)), [res]);
   const step = pick?.step ? res.steps.find((s) => s.step === pick.step) : undefined;
   const stepRows = useMemo(() => Object.fromEntries((step?.accounts || []).map((a) => [a.account_id, a])), [step]);
   const set = pick ? new Set(pick.ids) : null;
@@ -312,7 +317,7 @@ function Accounts({ res, pick, clear }: { res: Results; pick: Pick; clear: () =>
             const s = stepRows[a.account_id];
             return (
               <tr key={a.account_id}>
-                <td>{a.name}{a.holdout ? <span className="tag">holdout</span> : null}</td>
+                <td>{a.name}{a.holdout ? <span className="tag">holdout</span> : null}{stalled.has(a.account_id) ? <span className="tag" title="More than twice the usual time at this stage">stalled</span> : null}</td>
                 <td>{a.segment}</td>
                 <td>{a.stage}</td>
                 <td>{a.original_source}</td>
