@@ -60,6 +60,15 @@ python3 -m accounthub run --folder template/ --csv results/
 
 HubSpot's API doesn't expose web visits, ad clicks or marketing email sends per contact. Add them, or anything else HubSpot doesn't hold (LinkedIn ad clicks, direct mail), from a touches file: `--extra touches.csv` with columns `date, contact_email, company_domain, channel, kind (engaged|reached), detail`. Rows match an account by email, then by domain. A blank kind counts as reached, never engaged.
 
+## Make it yours
+
+Account Hub is a starting point, not a finished product. Fork it and change anything:
+
+- **Rebrand the dashboard.** Colors live at the top of `dashboard/src/style.css`; the "Built with Redavio" footer line is in `dashboard/src/App.tsx` and can go.
+- **Change the screens or build your own app.** Everything on screen comes from one file, `results.json`. Build your own React app, internal tool or AI agent on it.
+- **Change the rules.** Key roles, channels, costs and the HubSpot properties it reads are in `settings.example.json`; the math is in `accounthub/engine.py`.
+- **Bring other data.** Fill the files in `template/` from any CRM, or add a reader next to `accounthub/hubspot.py`.
+
 ## Data shape
 
 The full rules are in [SPEC.md](SPEC.md).

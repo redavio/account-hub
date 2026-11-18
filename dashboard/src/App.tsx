@@ -80,6 +80,9 @@ export default function App() {
           {tab === "accounts" && <Accounts res={res} pick={pick} clear={() => setPick(null)} />}
         </>
       )}
+      <footer className="muted small">
+        <a href="https://www.redavio.com/account-hub">Built with Redavio</a>
+      </footer>
     </div>
   );
 }
