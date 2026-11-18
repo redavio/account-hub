@@ -26,7 +26,10 @@ type Show = (title: string, ids: string[], step?: string) => void;
 export default function App() {
   const [res, setRes] = useState<Results | null>(null);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<Tab>("funnel");
+  const [tab, setTab] = useState<Tab>(() => {
+    const v = new URLSearchParams(location.search).get("view");
+    return v === "grid" || v === "accounts" ? v : "funnel";
+  });
   const [pick, setPick] = useState<Pick>(null);
 
   useEffect(() => {
@@ -115,7 +118,7 @@ function Headline({ res, show }: { res: Results; show: Show }) {
 
 function Funnel({ res, show }: { res: Results; show: Show }) {
   return (
-    <section>
+    <section data-shot="1">
       <p className="help">Value per account is pipeline $: the share at the stage that become an Opportunity, times the average Opportunity. "Caused by marketing" here is estimated per channel; the headline card uses the holdout test when you have one.</p>
       <table>
         <thead>
@@ -168,7 +171,7 @@ function Grid({ res, show }: { res: Results; show: Show }) {
   const sourced = res.sourced_by_channel;
 
   return (
-    <section>
+    <section data-shot="2">
       <div className="controls">
         <select value={stepKey} onChange={(e) => setStepKey(e.target.value)} aria-label="Step">
           {res.steps.map((s) => <option key={s.step} value={s.step}>{s.label}</option>)}
@@ -296,7 +299,7 @@ function Accounts({ res, pick, clear }: { res: Results; pick: Pick; clear: () =>
     (a) => (!set || set.has(a.account_id)) && (!gapsOnly || gaps[a.account_id]) && a.name.toLowerCase().includes(q.toLowerCase()),
   );
   return (
-    <section>
+    <section data-shot="3">
       <div className="controls">
         <input placeholder="Search accounts" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search accounts" />
         <label><input type="checkbox" checked={gapsOnly} onChange={(e) => setGapsOnly(e.target.checked)} /> Missing key roles now</label>
