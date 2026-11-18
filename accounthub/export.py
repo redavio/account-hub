@@ -1,4 +1,4 @@
-"""Results as flat tables: the Google Sheet's results tabs read these."""
+"""Results as flat tables: open them in any spreadsheet."""
 import csv
 import os
 

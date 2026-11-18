@@ -1,6 +1,6 @@
 """Account Hub engine: four tables in, one results file out.
 
-Tables (same columns as the Google Sheet template; HubSpot is read into the same shape):
+Tables (same columns as the files in template/; HubSpot is read into the same shape):
   accounts: account_id, name, segment, target, holdout, original_source,
             nhr_lead_date, hand_raiser_date, sql_date
   contacts: contact_id, account_id, name, role
