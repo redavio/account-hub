@@ -1,6 +1,6 @@
 # Account Hub
 
-Account Hub shows which touches and which buying-committee coverage move your target accounts to the next funnel stage, and what that is worth in pipeline. It reads HubSpot (or a Google Sheet for any other CRM), runs the math in plain Python, and writes one results file. That file feeds a React dashboard, a Claude artifact and a Google Sheet, so all three always show the same numbers.
+Account Hub shows which touches and which buying-committee coverage move your target accounts to the next funnel stage, and what that is worth in pipeline. It reads HubSpot (or four template files from any other CRM), runs the math in plain Python, and writes one results file. That file feeds a React dashboard, a Claude artifact and spreadsheet tables, so all three always show the same numbers.
 
 This is the **Performance** tab. An **Activations** tab (emails, LinkedIn audiences) comes next and works from the gaps list this one writes.
 
@@ -46,21 +46,24 @@ cd dashboard && npm install && cp ../results.json public/ && npm run dev
 
 To share the dashboard with your team, deploy the `dashboard` folder to Vercel (or any static host) with your `results.json` in `public/`. Anyone can also open a results file with the "Open results file" button.
 
-### 3. From the Google Sheet template (any CRM)
+### 3. From any CRM
 
-Make a copy of the [Account Hub template](https://docs.google.com/spreadsheets/d/1UnjCWzuaxbb-K9xZ0u9t4n58TpRjp1krkYgR9sfasUY/copy), fill the four tabs, download each as CSV into one folder, then:
+Fill the four files in [`template/`](template) (accounts, contacts, deals, touches; one example row each) from your CRM export, a spreadsheet or your own script, then:
 
 ```bash
-python3 -m accounthub run --folder my-data/ --csv results/
+python3 -m accounthub run --folder template/ --csv results/
 ```
 
-`--csv` writes the results tabs (summary, funnel, step grid, caused / touched / started by marketing, gaps, accounts) to import back into the Sheet.
+`--csv` writes the results tables (summary, funnel, step grid, caused / touched / started by marketing, gaps, accounts) to open in Google Sheets or Excel.
 
 ### Extra touches
 
-HubSpot's API doesn't expose web visits, ad clicks or marketing email sends per contact. Add them, or anything else HubSpot doesn't hold (LinkedIn ad clicks, direct mail), from the template's touches tab: `--extra touches.csv` with columns `date, contact_email, company_domain, channel, kind (engaged|reached), detail`. Rows match an account by email, then by domain. A blank kind counts as reached, never engaged.
+HubSpot's API doesn't expose web visits, ad clicks or marketing email sends per contact. Add them, or anything else HubSpot doesn't hold (LinkedIn ad clicks, direct mail), from a touches file: `--extra touches.csv` with columns `date, contact_email, company_domain, channel, kind (engaged|reached), detail`. Rows match an account by email, then by domain. A blank kind counts as reached, never engaged.
 
 ## Data shape
+
+The full rules are in [SPEC.md](SPEC.md).
+
 
 | Table | Columns |
 | --- | --- |

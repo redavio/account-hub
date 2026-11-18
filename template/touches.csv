@@ -1,0 +1,2 @@
+touch_id,account_id,contact_id,contact_email,company_domain,date,channel,kind,detail
+T1,A001,C0001,pia.gray@stoneloopinc.example.com,stoneloopinc.example.com,2026-07-02,paid social,engaged,ad click

@@ -1,0 +1,2 @@
+account_id,name,domain,segment,target,holdout,original_source,nhr_lead_date,hand_raiser_date,sql_date
+A001,StoneLoop Inc,stoneloopinc.example.com,Enterprise,yes,no,paid social,2026-06-26,2026-07-14,

@@ -11,7 +11,7 @@ Never do the funnel, window, lift or significance math yourself. Run the engine 
 
 1. Get the data, in this order of preference:
    - HubSpot: `python3 -m accounthub run --hubspot --csv results/` (run `python3 -m accounthub connect` first if not connected).
-   - Any other CRM: four CSVs in one folder (accounts, contacts, deals, touches; columns in README.md), then `python3 -m accounthub run --folder <folder> --csv results/`.
+   - Any other CRM: the four files in template/ filled from their CRM (columns in SPEC.md), then `python3 -m accounthub run --folder <folder> --csv results/`.
    - Touches HubSpot doesn't hold (web visits, ad clicks): add `--extra <csv>`.
    - Settings (key roles per step, costs, property names): `--settings settings.json`, from settings.example.json.
 2. Read `results.json`. Lead with the headline: pipeline, then started by / touched by / caused by marketing, with their industry terms in brackets (sourced, influenced, incremental), then won and win rate.
