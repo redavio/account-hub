@@ -130,7 +130,7 @@ function Funnel({ res, show }: { res: Results; show: Show }) {
               <td>{f.label}</td>
               <td><N ids={f.account_ids} title={f.label} show={show}>{f.accounts}</N></td>
               <td>{f.advance_rate === null ? "–" : <N ids={f.judged_ids} title={`${f.label}: accounts judged`} show={show} step={res.steps.find((s) => s.from === f.stage)?.step}>{pct(f.advance_rate)} ({f.judged})</N>}</td>
-              <td><N ids={f.account_ids} title={f.label} show={show}>{money(f.value)}</N></td>
+              <td><N ids={f.account_ids} title={f.label} show={show}>{money(f.value)}{f.stage === "closed_won" ? " avg won" : ""}</N></td>
               <td><N ids={f.pipeline_ids} title={`${f.label}: with pipeline`} show={show}>{money(f.pipeline)}</N></td>
               <td><N ids={f.started_ids} title={`${f.label}: started by marketing`} show={show}>{money(f.started_by_marketing)}</N></td>
               <td><N ids={f.touched_ids} title={`${f.label}: touched by marketing`} show={show}>{money(f.touched_by_marketing)}</N></td>
