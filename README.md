@@ -64,7 +64,7 @@ HubSpot's API doesn't expose web visits, ad clicks or marketing email sends per 
 
 Account Hub is a starting point, not a finished product. Fork it and change anything:
 
-- **Rebrand the dashboard.** Colors live at the top of `dashboard/src/style.css`; the "Built with Redavio" footer line is in `dashboard/src/App.tsx` and can go.
+- **Brand the dashboard.** It ships unbranded. Set your name and logo in `dashboard/src/brand.ts` and your colors at the top of `dashboard/src/style.css`.
 - **Change the screens or build your own app.** Everything on screen comes from one file, `results.json`. Build your own React app, internal tool or AI agent on it.
 - **Change the rules.** Key roles, channels, costs and the HubSpot properties it reads are in `settings.example.json`; the math is in `accounthub/engine.py`.
 - **Bring other data.** Fill the files in `template/` from any CRM, or add a reader next to `accounthub/hubspot.py`.

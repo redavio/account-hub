@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { BRAND } from "./brand";
 import type { Results, Step, StepAccount, Test } from "./types";
 
 const money = (n: number) =>
@@ -56,7 +57,7 @@ export default function App() {
     <div className="page">
       <header>
         <div>
-          <h1>Account Hub <span className="muted">· Performance</span></h1>
+          <h1>{BRAND.logo && <img src={BRAND.logo} alt="" className="logo" />}{BRAND.name} <span className="muted">· Performance</span></h1>
           {res && <p className="muted">Data through {res.as_of}. Touches since {res.touch_history_start}.</p>}
         </div>
         <label className="file">
@@ -80,9 +81,6 @@ export default function App() {
           {tab === "accounts" && <Accounts res={res} pick={pick} clear={() => setPick(null)} />}
         </>
       )}
-      <footer className="muted small">
-        <a href="https://www.redavio.com/account-hub">Built with Redavio</a>
-      </footer>
     </div>
   );
 }
