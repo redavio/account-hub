@@ -151,9 +151,16 @@ def main():
 
     made = batch_create(hs, "contacts", [{
         "firstname": c["name"].split()[0], "lastname": c["name"].split()[1], "email": c["email"],
-        "account_hub_id": c["contact_id"], "account_hub_role": c["role"]} for c in data["contacts"]])
+        "account_hub_id": c["contact_id"], "account_hub_role": c["role"],
+        # HubSpot sets a company's original source from its contacts, so the source goes here too.
+        "hs_analytics_source": TO_SOURCE[accts[c["account_id"]]["original_source"]]} for c in data["contacts"]])
     contact_id = {r["properties"]["account_hub_id"]: r["id"] for r in made}
     associate(hs, "contacts", "companies", [(contact_id[c["contact_id"]], company_id[c["account_id"]]) for c in data["contacts"]])
+    # Associating contacts makes HubSpot recompute the company's original source (to "offline"
+    # for API-made contacts), so set it again now.
+    srcs = [{"id": company_id[x["account_id"]], "properties": {"hs_analytics_source": TO_SOURCE[x["original_source"]]}} for x in data["accounts"]]
+    for i in range(0, len(srcs), 100):
+        hs.call("POST", "/crm/v3/objects/companies/batch/update", {"inputs": srcs[i:i + 100]})
 
     stage = {"won": "closedwon", "lost": "closedlost", "open": "presentationscheduled"}
     made = batch_create(hs, "deals", [{

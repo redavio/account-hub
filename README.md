@@ -48,7 +48,7 @@ To share the dashboard with your team, deploy the `dashboard` folder to Vercel (
 
 ### 3. From the Google Sheet template (any CRM)
 
-Make a copy of the [Account Hub template](SHEET_URL), fill the four tabs, download each as CSV into one folder, then:
+Make a copy of the [Account Hub template](https://docs.google.com/spreadsheets/d/1UnjCWzuaxbb-K9xZ0u9t4n58TpRjp1krkYgR9sfasUY/copy), fill the four tabs, download each as CSV into one folder, then:
 
 ```bash
 python3 -m accounthub run --folder my-data/ --csv results/

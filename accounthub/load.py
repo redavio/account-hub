@@ -7,10 +7,15 @@ TABLES = ["accounts", "contacts", "deals", "touches"]
 
 
 def read_folder(path):
+    """Touches can name their account by account_id, or by contact_email / company_domain."""
     out = {}
     for name in TABLES:
         f = os.path.join(path, f"{name}.csv")
-        out[name] = list(csv.DictReader(open(f))) if os.path.exists(f) else []
+        out[name] = list(csv.DictReader(open(f, encoding="utf-8-sig"))) if os.path.exists(f) else []
+    touches, out["touches"] = out["touches"], []
+    missed = add_extra_touches(out, touches)
+    if missed:
+        print(f"{missed} touches matched no account (by account_id, email or domain) and were skipped.")
     return out
 
 

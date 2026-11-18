@@ -318,7 +318,7 @@ def _step(frm, to, window, wsource, accounts, touches, s, as_of, history_start, 
     for r in rows:
         if not r["advanced"]:
             for role in r["missing_roles"]:
-                gaps.append({"account_id": r["account_id"], "name": r["name"], "step": f"{frm}->{to}",
+                gaps.append({"account_id": r["account_id"], "name": r["name"], "step": f"{STAGE_LABELS[frm]} → {STAGE_LABELS[to]}",
                              "missing_role": role})
     for r in rows:
         del r["_engaged"]
