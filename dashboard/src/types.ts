@@ -18,10 +18,12 @@ export interface Test {
   value: number;
   cost: number | null;
   cost_per_extra_advance: number | null;
+  exposed_ids: string[];
 }
 
 export interface StepAccount {
   account_id: string;
+  cohort: string;
   name: string;
   segment: string;
   holdout: boolean;
@@ -46,9 +48,10 @@ export interface Step {
   advanced: number;
   rate: number | null;
   influenced: {
-    channels: { channel: string; credited_advances: number; pipeline: number }[];
-    roles: { role: string; credited_advances: number; pipeline: number }[];
+    channels: { channel: string; credited_advances: number; pipeline: number; won: number; account_ids: string[] }[];
+    roles: { role: string; credited_advances: number; pipeline: number; won: number; account_ids: string[] }[];
     influenced_advances: number;
+    account_ids: string[];
   };
   incremental: {
     program: (Test & { label: string }) | null;
@@ -80,13 +83,19 @@ export interface Results {
     opportunities: number;
     closed_won: number;
     win_rate: number | null;
-    started_by_marketing: { opportunities: number; pipeline: number; won: number };
-    touched_by_marketing: { opportunities: number; pipeline: number; won: number };
-    caused_by_marketing: { pipeline: number; label: string; status: Status };
+    opportunity_ids: string[];
+    won_ids: string[];
+    started_by_marketing: { opportunities: number; pipeline: number; won: number; account_ids: string[] };
+    touched_by_marketing: { opportunities: number; pipeline: number; won: number; account_ids: string[] };
+    caused_by_marketing: { pipeline: number; label: string; status: Status; account_ids: string[] };
   };
-  funnel: { stage: string; label: string; accounts: number; advance_rate: number | null; value: number; account_ids: string[] }[];
+  funnel: {
+    stage: string; label: string; accounts: number; advance_rate: number | null; judged: number | null; value: number;
+    pipeline: number; started_by_marketing: number; touched_by_marketing: number; caused_by_marketing: number; won: number;
+    account_ids: string[]; judged_ids: string[];
+  }[];
   steps: Step[];
-  sourced_by_channel: { channel: string; accounts: number; opportunities: number; pipeline: number; won: number }[];
-  gaps: { account_id: string; name: string; step: string; missing_role: string }[];
+  sourced_by_channel: { channel: string; accounts: number; opportunities: number; pipeline: number; won: number; account_ids: string[] }[];
+  gaps: { account_id: string; name: string; segment: string; stage: string; step: string; missing_role: string; days_at_stage: number }[];
   accounts: Account[];
 }

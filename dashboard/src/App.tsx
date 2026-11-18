@@ -12,13 +12,15 @@ const VIEWS = {
   caused: "Caused by marketing",
 } as const;
 const TERMS: Record<keyof typeof VIEWS, string> = {
-  started: "Sourced: accounts whose first touch was marketing.",
-  touched: "Influenced: advances credited equally to every engaged marketing touch in the window. Credit, not proof.",
-  caused: "Incremental: the extra advances marketing caused, testing each channel and role with the others held fixed.",
+  started: "Sourced: accounts whose original source was a marketing channel.",
+  touched: "Influenced: each advance credited equally to the engaged marketing touches in its window. Credit, not proof.",
+  caused: "Incremental: extra advances, testing each channel and role with the others, segment and cohort held fixed.",
 };
 
 type Tab = "funnel" | "grid" | "accounts";
-type Pick = { title: string; ids: string[] } | null;
+/** What the Accounts tab shows: a list of accounts, and the step they were picked from, if any. */
+type Pick = { title: string; ids: string[]; step?: string } | null;
+type Show = (title: string, ids: string[], step?: string) => void;
 
 export default function App() {
   const [res, setRes] = useState<Results | null>(null);
@@ -29,7 +31,7 @@ export default function App() {
   useEffect(() => {
     const src = new URLSearchParams(location.search).get("src") || "results.json";
     fetch(src)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`Couldn't load ${src}`))))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`Couldn't load ${src}.`))))
       .then(setRes)
       .catch((e) => setError(e.message));
   }, []);
@@ -44,9 +46,10 @@ export default function App() {
       }
     });
 
-  const show = (title: string, ids: string[]) => {
-    setPick({ title, ids });
+  const show: Show = (title, ids, step) => {
+    setPick({ title, ids, step });
     setTab("accounts");
+    window.scrollTo(0, 0);
   };
 
   return (
@@ -64,7 +67,7 @@ export default function App() {
       {error && <p className="note">{error} Run the engine, then open results.json here.</p>}
       {res && (
         <>
-          <Headline res={res} />
+          <Headline res={res} show={show} />
           <nav>
             {(["funnel", "grid", "accounts"] as Tab[]).map((t) => (
               <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
@@ -81,22 +84,27 @@ export default function App() {
   );
 }
 
-function Headline({ res }: { res: Results }) {
+/** A number that opens the accounts behind it. */
+function N({ ids, title, show, step, children }: { ids: string[]; title: string; show: Show; step?: string; children: React.ReactNode }) {
+  return ids.length ? <button className="num" onClick={() => show(title, ids, step)}>{children}</button> : <>{children}</>;
+}
+
+function Headline({ res, show }: { res: Results; show: Show }) {
   const h = res.headline;
-  const caused = h.caused_by_marketing;
-  const cards: [string, string, string][] = [
-    ["Pipeline", money(h.pipeline_total), `${h.opportunities} opportunities`],
-    [VIEWS.started, money(h.started_by_marketing.pipeline), "sourced"],
-    [VIEWS.touched, money(h.touched_by_marketing.pipeline), "influenced"],
-    [VIEWS.caused, caused.status === "lift" ? money(caused.pipeline) : caused.status, `incremental, ${caused.label}`],
-    ["Won", money(h.won_total), `win rate ${pct(h.win_rate)}`],
+  const c = h.caused_by_marketing;
+  const cards: [string, string, string, string[], string][] = [
+    ["Pipeline", money(h.pipeline_total), `${h.opportunities} opportunities`, h.opportunity_ids, "All opportunities"],
+    [VIEWS.started, money(h.started_by_marketing.pipeline), "sourced", h.started_by_marketing.account_ids, "Started by marketing"],
+    [VIEWS.touched, money(h.touched_by_marketing.pipeline), "influenced", h.touched_by_marketing.account_ids, "Touched by marketing"],
+    [VIEWS.caused, c.status === "lift" ? money(c.pipeline) : c.status, `incremental, ${c.label}`, c.account_ids, "Caused by marketing"],
+    ["Won", money(h.won_total), `win rate ${pct(h.win_rate)}`, h.won_ids, "Closed won"],
   ];
   return (
     <section className="cards">
-      {cards.map(([label, value, sub]) => (
+      {cards.map(([label, value, sub, ids, title]) => (
         <div key={label} className="card">
           <div className="muted small">{label}</div>
-          <div className="big">{value}</div>
+          <div className="big"><N ids={ids} title={title} show={show}>{value}</N></div>
           <div className="muted small">{sub}</div>
         </div>
       ))}
@@ -104,21 +112,30 @@ function Headline({ res }: { res: Results }) {
   );
 }
 
-function Funnel({ res, show }: { res: Results; show: (t: string, ids: string[]) => void }) {
+function Funnel({ res, show }: { res: Results; show: Show }) {
   return (
     <section>
-      <p className="help">Value per stage is pipeline $: the share of accounts at the stage that become an Opportunity, times the average Opportunity.</p>
+      <p className="help">Value per account is pipeline $: the share of accounts at the stage that become an Opportunity, times the average Opportunity.</p>
       <table>
         <thead>
-          <tr><th>Stage</th><th>Accounts</th><th>Advance rate to next stage</th><th>Value per account (pipeline $)</th></tr>
+          <tr>
+            <th>Stage</th><th>Accounts</th><th title="Of the accounts whose window has passed">Advance rate (accounts judged)</th>
+            <th>Value per account</th><th>Pipeline $</th><th title={TERMS.started}>Started by marketing</th>
+            <th title={TERMS.touched}>Touched by marketing</th><th title={TERMS.caused}>Caused by marketing</th><th>Won $</th>
+          </tr>
         </thead>
         <tbody>
           {res.funnel.map((f) => (
             <tr key={f.stage}>
               <td>{f.label}</td>
-              <td><button className="num" onClick={() => show(f.label, f.account_ids)}>{f.accounts}</button></td>
-              <td>{pct(f.advance_rate)}</td>
+              <td><N ids={f.account_ids} title={f.label} show={show}>{f.accounts}</N></td>
+              <td>{f.advance_rate === null ? "–" : <N ids={f.judged_ids} title={`${f.label}: accounts judged`} show={show} step={res.steps.find((s) => s.from === f.stage)?.step}>{pct(f.advance_rate)} ({f.judged})</N>}</td>
               <td>{money(f.value)}</td>
+              <td>{money(f.pipeline)}</td>
+              <td>{money(f.started_by_marketing)}</td>
+              <td>{money(f.touched_by_marketing)}</td>
+              <td>{f.caused_by_marketing ? `${money(f.caused_by_marketing)} (estimated)` : "–"}</td>
+              <td>{money(f.won)}</td>
             </tr>
           ))}
         </tbody>
@@ -132,7 +149,11 @@ const statusText = (t: Test) =>
   t.status === "negative" ? `${Math.round(t.lift * 100)} pts` :
   t.status === "not enough data yet" ? `not enough data yet (~${t.more_accounts_needed.toLocaleString()} more accounts)` : "no lift found";
 
-function Grid({ res, show }: { res: Results; show: (t: string, ids: string[]) => void }) {
+/** Reach depth for one channel, when the channel filter is on. */
+const depthFor = (a: StepAccount, channel: string) =>
+  !channel ? a.depth : a.channels_engaged.includes(channel) ? "Engaged" : a.channels_reached_only.includes(channel) ? "Reached" : "Not reached";
+
+function Grid({ res, show }: { res: Results; show: Show }) {
   const [stepKey, setStepKey] = useState(res.steps[0]?.step);
   const [view, setView] = useState<keyof typeof VIEWS>("caused");
   const [channel, setChannel] = useState("");
@@ -140,29 +161,28 @@ function Grid({ res, show }: { res: Results; show: (t: string, ids: string[]) =>
   const step = res.steps.find((s) => s.step === stepKey) as Step;
   const channels = useMemo(() => [...new Set(step.accounts.flatMap((a) => [...a.channels_engaged, ...a.channels_reached_only]))].sort(), [step]);
   const segments = useMemo(() => [...new Set(step.accounts.map((a) => a.segment))].sort(), [step]);
-  const rows = step.accounts.filter(
-    (a) => (!segment || a.segment === segment) && (!channel || a.channels_engaged.includes(channel) || a.channels_reached_only.includes(channel)),
-  );
-  const cell = (d: string, c: string) => rows.filter((a) => a.depth === d && a.coverage === c);
+  const rows = step.accounts.filter((a) => !segment || a.segment === segment);
   const ids = (xs: StepAccount[]) => xs.map((a) => a.account_id);
+  const rate = (xs: StepAccount[]) => (xs.length ? `${pct(xs.filter((a) => a.advanced).length / xs.length)} (${xs.length})` : "–");
+  const sourced = res.sourced_by_channel;
 
   return (
     <section>
       <div className="controls">
-        <select value={stepKey} onChange={(e) => setStepKey(e.target.value)}>
+        <select value={stepKey} onChange={(e) => setStepKey(e.target.value)} aria-label="Step">
           {res.steps.map((s) => <option key={s.step} value={s.step}>{s.label}</option>)}
         </select>
-        <select value={channel} onChange={(e) => setChannel(e.target.value)}>
+        <select value={channel} onChange={(e) => setChannel(e.target.value)} aria-label="Channel">
           <option value="">All channels</option>
           {channels.map((c) => <option key={c}>{c}</option>)}
         </select>
-        <select value={segment} onChange={(e) => setSegment(e.target.value)}>
+        <select value={segment} onChange={(e) => setSegment(e.target.value)} aria-label="Segment">
           <option value="">All segments</option>
           {segments.map((s) => <option key={s}>{s}</option>)}
         </select>
       </div>
       <p className="help">
-        Each cell: advance rate (accounts). Touches count from the day an account reached the stage, for{" "}
+        Advance rate (accounts). Reach{channel ? ` by ${channel}` : ""} counts from the day an account reached the stage, for{" "}
         {step.window_days ? `${step.window_days} days (${step.window_source})` : step.window_source}, and only before it advanced.
       </p>
       <table className="grid">
@@ -171,20 +191,15 @@ function Grid({ res, show }: { res: Results; show: (t: string, ids: string[]) =>
         </thead>
         <tbody>
           {DEPTHS.map((d) => {
-            const all = rows.filter((a) => a.depth === d);
+            const all = rows.filter((a) => depthFor(a, channel) === d);
             return (
               <tr key={d}>
                 <td>{d}</td>
                 {COVERAGE.map((c) => {
-                  const xs = cell(d, c);
-                  const adv = xs.filter((a) => a.advanced).length;
-                  return (
-                    <td key={c}>
-                      {xs.length ? <button className="num" onClick={() => show(`${step.label}: ${d}, ${c}`, ids(xs))}>{pct(adv / xs.length)} ({xs.length})</button> : "–"}
-                    </td>
-                  );
+                  const xs = all.filter((a) => a.coverage === c);
+                  return <td key={c}><N ids={ids(xs)} title={`${step.label}: ${d}, ${c}`} show={show} step={step.step}>{rate(xs)}</N></td>;
                 })}
-                <td>{all.length ? <button className="num" onClick={() => show(`${step.label}: ${d}`, ids(all))}>{pct(all.filter((a) => a.advanced).length / all.length)} ({all.length})</button> : "–"}</td>
+                <td><N ids={ids(all)} title={`${step.label}: ${d}`} show={show} step={step.step}>{rate(all)}</N></td>
               </tr>
             );
           })}
@@ -202,7 +217,7 @@ function Grid({ res, show }: { res: Results; show: (t: string, ids: string[]) =>
         <>
           {step.incremental.program && (
             <p className="note">
-              Program vs holdout (tested): {statusText(step.incremental.program)}, {step.incremental.program.n_exposed} program vs {step.incremental.program.n_control} holdout accounts.
+              Program vs holdout (tested): {statusText(step.incremental.program)}, {step.incremental.program.n_exposed} program and {step.incremental.program.n_control} holdout accounts.
             </p>
           )}
           <table>
@@ -210,17 +225,20 @@ function Grid({ res, show }: { res: Results; show: (t: string, ids: string[]) =>
             <tbody>
               {[...step.incremental.channels, ...step.incremental.roles]
                 .sort((a, b) => Number(b.status === "lift") - Number(a.status === "lift") || a.p_adjusted - b.p_adjusted)
-                .map((t) => (
-                  <tr key={(t.channel || t.role) + t.exposure} className={t.status === "lift" ? "win" : ""}>
-                    <td>{t.channel || `${t.role} (role)`}</td>
-                    <td>{t.exposure}</td>
-                    <td>{statusText(t)}</td>
-                    <td>{pct(t.rate_exposed)} / {pct(t.rate_control)}</td>
-                    <td>{t.extra_advances ? t.extra_advances.toFixed(1) : "–"}</td>
-                    <td>{t.value ? money(t.value) : "–"}</td>
-                    <td>{t.cost_per_extra_advance ? money(t.cost_per_extra_advance) : t.status === "lift" ? "no cost entered" : "–"}</td>
-                  </tr>
-                ))}
+                .map((t) => {
+                  const name = t.channel || `${t.role} (role)`;
+                  return (
+                    <tr key={name + t.exposure} className={t.status === "lift" ? "win" : ""}>
+                      <td><N ids={t.exposed_ids} title={`${step.label}: ${name}, ${t.exposure}`} show={show} step={step.step}>{name}</N></td>
+                      <td>{t.exposure}</td>
+                      <td>{statusText(t)}</td>
+                      <td>{pct(t.rate_exposed)} / {pct(t.rate_control)}</td>
+                      <td>{t.extra_advances ? t.extra_advances.toFixed(1) : "–"}</td>
+                      <td>{t.value ? money(t.value) : "–"}</td>
+                      <td>{t.cost_per_extra_advance ? money(t.cost_per_extra_advance) : t.status === "lift" && t.channel ? "no cost entered" : "–"}</td>
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
           {step.suggested_key_roles.length > 0 && <p className="note">Suggested key roles for this step, from your history: {step.suggested_key_roles.join(", ")}.</p>}
@@ -228,10 +246,13 @@ function Grid({ res, show }: { res: Results; show: (t: string, ids: string[]) =>
       )}
       {view === "touched" && (
         <table>
-          <thead><tr><th>Channel</th><th>Credited advances</th><th>Pipeline $</th></tr></thead>
+          <thead><tr><th>Channel or role</th><th>Credited advances</th><th>Pipeline $</th><th>Won $</th></tr></thead>
           <tbody>
-            {step.influenced.channels.map((c) => (
-              <tr key={c.channel}><td>{c.channel}</td><td>{c.credited_advances.toFixed(1)}</td><td>{money(c.pipeline)}</td></tr>
+            {[...step.influenced.channels.map((c) => ({ ...c, name: c.channel })), ...step.influenced.roles.map((r) => ({ ...r, name: `${r.role} (role)` }))].map((c) => (
+              <tr key={c.name}>
+                <td><N ids={c.account_ids} title={`${step.label}: touched by ${c.name}`} show={show} step={step.step}>{c.name}</N></td>
+                <td>{c.credited_advances.toFixed(1)}</td><td>{money(c.pipeline)}</td><td>{money(c.won)}</td>
+              </tr>
             ))}
           </tbody>
         </table>
@@ -240,8 +261,12 @@ function Grid({ res, show }: { res: Results; show: (t: string, ids: string[]) =>
         <table>
           <thead><tr><th>Original source</th><th>Accounts</th><th>Opportunities</th><th>Pipeline $</th><th>Won $</th></tr></thead>
           <tbody>
-            {res.sourced_by_channel.map((c) => (
-              <tr key={c.channel}><td>{c.channel}</td><td>{c.accounts}</td><td>{c.opportunities}</td><td>{money(c.pipeline)}</td><td>{money(c.won)}</td></tr>
+            {sourced.map((c) => (
+              <tr key={c.channel}>
+                <td>{c.channel}</td>
+                <td><N ids={c.account_ids} title={`Started by ${c.channel}`} show={show}>{c.accounts}</N></td>
+                <td>{c.opportunities}</td><td>{money(c.pipeline)}</td><td>{money(c.won)}</td>
+              </tr>
             ))}
           </tbody>
         </table>
@@ -258,6 +283,8 @@ function Accounts({ res, pick, clear }: { res: Results; pick: Pick; clear: () =>
     res.gaps.forEach((g) => (m[g.account_id] ||= []).push(g.missing_role));
     return m;
   }, [res]);
+  const step = pick?.step ? res.steps.find((s) => s.step === pick.step) : undefined;
+  const stepRows = useMemo(() => Object.fromEntries((step?.accounts || []).map((a) => [a.account_id, a])), [step]);
   const set = pick ? new Set(pick.ids) : null;
   const rows = res.accounts.filter(
     (a) => (!set || set.has(a.account_id)) && (!gapsOnly || gaps[a.account_id]) && a.name.toLowerCase().includes(q.toLowerCase()),
@@ -265,24 +292,44 @@ function Accounts({ res, pick, clear }: { res: Results; pick: Pick; clear: () =>
   return (
     <section>
       <div className="controls">
-        <input placeholder="Search accounts" value={q} onChange={(e) => setQ(e.target.value)} />
-        <label><input type="checkbox" checked={gapsOnly} onChange={(e) => setGapsOnly(e.target.checked)} /> Missing key roles only</label>
+        <input placeholder="Search accounts" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search accounts" />
+        <label><input type="checkbox" checked={gapsOnly} onChange={(e) => setGapsOnly(e.target.checked)} /> Missing key roles now</label>
         {pick && <button onClick={clear}>Showing: {pick.title} ✕</button>}
       </div>
-      <p className="help">{rows.length} accounts. Missing key roles are the list the Activations tab will work from.</p>
+      <p className="help">
+        {rows.length} accounts.{" "}
+        {step ? `Reach and roles are for ${step.label}.` : "Missing key roles are for each account's next step: the list the Activations tab will work from."}
+      </p>
       <table>
-        <thead><tr><th>Account</th><th>Segment</th><th>Stage</th><th>Original source</th><th>Pipeline $</th><th>Missing key roles</th></tr></thead>
+        <thead>
+          <tr>
+            <th>Account</th><th>Segment</th><th>Stage now</th><th>Original source</th><th>Pipeline $</th>
+            {step ? <><th>Reach</th><th>Roles engaged</th><th>Key roles missing</th><th>Advanced</th></> : <th>Key roles missing now</th>}
+          </tr>
+        </thead>
         <tbody>
-          {rows.slice(0, 500).map((a) => (
-            <tr key={a.account_id}>
-              <td>{a.name}{a.holdout ? <span className="tag">holdout</span> : null}</td>
-              <td>{a.segment}</td>
-              <td>{a.stage}</td>
-              <td>{a.original_source}</td>
-              <td>{a.pipeline ? money(a.pipeline) : "–"}</td>
-              <td>{(gaps[a.account_id] || []).join(", ") || "–"}</td>
-            </tr>
-          ))}
+          {rows.slice(0, 500).map((a) => {
+            const s = stepRows[a.account_id];
+            return (
+              <tr key={a.account_id}>
+                <td>{a.name}{a.holdout ? <span className="tag">holdout</span> : null}</td>
+                <td>{a.segment}</td>
+                <td>{a.stage}</td>
+                <td>{a.original_source}</td>
+                <td>{a.pipeline ? money(a.pipeline) : "–"}</td>
+                {step ? (
+                  <>
+                    <td>{s?.depth ?? "–"}</td>
+                    <td>{s?.roles_engaged.join(", ") || "–"}</td>
+                    <td>{s?.missing_roles.join(", ") || "–"}</td>
+                    <td>{s ? (s.advanced ? "yes" : "no") : "–"}</td>
+                  </>
+                ) : (
+                  <td>{(gaps[a.account_id] || []).join(", ") || "–"}</td>
+                )}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       {rows.length > 500 && <p className="help">Showing the first 500. Search to narrow.</p>}

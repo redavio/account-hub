@@ -23,10 +23,10 @@ Funnel: Non-hand-raiser lead → Hand-raiser → SQL → Opportunity → Closed 
 Value is pipeline $: a stage is worth the share of its accounts that become an Opportunity, times the average Opportunity. Won $ and win rate are shown alongside.
 
 The math, in short:
-- **Window.** Touches count from the day an account reaches a stage, for the number of days within which 80% of past advancing accounts advanced, and only before it advances. Too little history: the sales cycle in settings; none: the whole time at the stage.
-- **Cohorts.** An account counts toward a step only once its window has passed, so recent accounts aren't read as failures.
+- **Window.** Touches count from the day an account reaches a stage, for the number of days within which 80% of past advancing accounts advanced, and only before it advances. An account counts as advancing only if it advances within that window. Too little history: the sales cycle in settings; none: the whole time at the stage.
+- **Cohorts.** An account counts toward a step only once its window has passed, so recent accounts aren't read as failures, and every comparison holds the cohort (the month the account entered the stage) and the segment fixed.
 - **No fixed minimum sample.** A sample-size check based on your own advance rate decides between "no lift found" and "not enough data yet, about N more accounts needed".
-- **One correction** (Holm) covers every test in the report, so a false "lift" anywhere stays unlikely.
+- **One correction** (Holm) covers every test in the report, channels, roles and holdout tests together, so a false "lift" anywhere stays unlikely. The sample-size check uses the same corrected threshold.
 
 ## Run it
 
@@ -58,7 +58,7 @@ python3 -m accounthub run --folder my-data/ --csv results/
 
 ### Extra touches
 
-HubSpot's API doesn't expose web visits, ad clicks or marketing email sends per contact. Add them, or anything else HubSpot doesn't hold (LinkedIn ad clicks, direct mail), from the template's touches tab: `--extra touches.csv` with columns `date, contact_email, company_domain, channel, kind (engaged|reached), detail`. Rows match an account by email, then by domain.
+HubSpot's API doesn't expose web visits, ad clicks or marketing email sends per contact. Add them, or anything else HubSpot doesn't hold (LinkedIn ad clicks, direct mail), from the template's touches tab: `--extra touches.csv` with columns `date, contact_email, company_domain, channel, kind (engaged|reached), detail`. Rows match an account by email, then by domain. A blank kind counts as reached, never engaged.
 
 ## Data shape
 
@@ -77,7 +77,7 @@ Copy `settings.example.json` and pass `--settings`. You can set key roles per st
 
 ## Demo data and tests
 
-`seed/generate.py` makes about 1,000 fictional companies with planted effects (paid social ad clicks, event attendance and an engaged Finance contact truly help; web visits and unopened emails don't). The tests check the engine finds the real ones and invents none. `seed/hubspot_seed.py` writes the same data into a HubSpot **test** account and refuses to run on any other.
+`seed/generate.py` makes 2,000 fictional companies with planted effects (paid social ad clicks, event attendance and an engaged Finance contact truly help; web visits and sent-only emails don't) and planted confounders (advance rates fall over time, Enterprise moves slower, events start two months in). The tests check the engine finds the real ones and invents none. `scripts/hand_check.py` re-derives three accounts from the raw tables with separate code. `seed/hubspot_seed.py` writes the same data into a HubSpot **test** account and refuses to run on any other.
 
 ```bash
 python3 -m unittest discover tests

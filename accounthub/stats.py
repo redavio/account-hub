@@ -9,58 +9,41 @@ def _hypergeom(n_total, n_success, n_draw):
     return {k: comb(n_success, k) * comb(n_total - n_success, n_draw - k) / denom for k in range(lo, hi + 1)}
 
 
-def stratified_lift(strata):
-    """Exposed vs control advance rates, compared within each stratum (segment).
+def exact_stratified(strata):
+    """Program vs holdout (or any exposed vs control), compared within strata, exactly.
 
     strata: list of (exposed_n, exposed_advanced, control_n, control_advanced).
-    Lift = weighted average of (exposed rate - control rate), weights = exposed counts.
-    p-value is exact: with each stratum's totals fixed, the exposed advancers follow a
-    hypergeometric distribution, so the lift's null distribution is their weighted sum.
+    Lift = weighted average of (exposed rate - control rate) within strata, weighted by exposed counts.
+    p-value: the exact stratified (Cochran-Mantel-Haenszel) test. With each stratum's totals fixed,
+    exposed advancers follow a hypergeometric distribution; their sum's distribution is the
+    convolution of those, which is cheap to compute exactly at any size.
     """
     usable = [s for s in strata if s[0] > 0 and s[2] > 0]
     if not usable:
         return None
     n1_total = sum(s[0] for s in usable)
-    terms, observed = [], 0.0
+    lift = sum((n1 / n1_total) * (a1 / n1 - a0 / n0) for n1, a1, n0, a0 in usable)
+    dist = {0: 1.0}
+    observed = 0
     for n1, a1, n0, a0 in usable:
-        w = n1 / n1_total
-        total_adv = a1 + a0
-        # T contribution for k exposed advancers: w * (k/n1 - (total_adv-k)/n0)
-        dist = _hypergeom(n1 + n0, total_adv, n1)
-        terms.append({round(w * (k / n1 - (total_adv - k) / n0), 12): p for k, p in dist.items()})
-        observed += w * (a1 / n1 - a0 / n0)
-    support = 1
-    for t in terms:
-        support *= len(t)
-    if support > 5_000:
-        # Large groups: the exact distribution is a sum of independent pieces, so its mean
-        # and variance are known; the normal approximation is accurate at this size.
-        mean = sum(sum(v * p for v, p in t.items()) for t in terms)
-        var = sum(sum(v * v * p for v, p in t.items()) - sum(v * p for v, p in t.items()) ** 2 for t in terms)
-        z = abs(observed - mean) / sqrt(var) if var > 0 else 0.0
-        p = 2 * (1 - _phi(z))
-        return _result(usable, observed, p)
-    dist = {0.0: 1.0}
-    for t in terms:
+        piece = _hypergeom(n1 + n0, a1 + a0, n1)
         nxt = {}
-        for v1, p1 in dist.items():
-            for v2, p2 in t.items():
-                key = round(v1 + v2, 12)
-                nxt[key] = nxt.get(key, 0.0) + p1 * p2
+        for k1, p1 in dist.items():
+            for k2, p2 in piece.items():
+                nxt[k1 + k2] = nxt.get(k1 + k2, 0.0) + p1 * p2
         dist = nxt
-    mean = sum(v * p for v, p in dist.items())
+        observed += a1
+    mean = sum(k * p for k, p in dist.items())
     dev = abs(observed - mean) - 1e-9
-    p = sum(pr for v, pr in dist.items() if abs(v - mean) >= dev)
-    return _result(usable, observed, p)
+    p = sum(pr for k, pr in dist.items() if abs(k - mean) >= dev)
+    return _result(usable, lift, p)
 
 
-def _result(usable, observed, p):
+def _result(usable, lift, p):
     n1 = sum(s[0] for s in usable)
     n0 = sum(s[2] for s in usable)
-    r1 = sum(s[1] for s in usable) / n1
-    r0 = sum(s[3] for s in usable) / n0
-    return {"lift": observed, "p": min(1.0, p), "n_exposed": n1, "n_control": n0,
-            "rate_exposed": r1, "rate_control": r0}
+    return {"lift": lift, "p": min(1.0, p), "n_exposed": n1, "n_control": n0,
+            "rate_exposed": sum(s[1] for s in usable) / n1, "rate_control": sum(s[3] for s in usable) / n0}
 
 
 def holm(pvalues):
@@ -96,8 +79,9 @@ def sample_check(lift, rate_control, n1, n0, alpha=0.05, power=0.8):
     conventions (5% false-alarm rate, 80% chance of detecting a real effect).
     Returns (enough_data, more_accounts_needed).
     """
-    if lift <= 0 or n1 == 0 or n0 == 0:
+    if n1 == 0 or n0 == 0 or lift == 0:
         return True, 0
+    lift = abs(lift)   # a small sample can't rule out an effect either way
     var = max(rate_control * (1 - rate_control), 1e-6)
     se = sqrt(var * (1 / n1 + 1 / n0))
     za = _z(1 - alpha / 2)

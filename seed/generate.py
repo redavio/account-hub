@@ -7,6 +7,7 @@ generator builds in on purpose, so the analysis can be checked against a known a
     1. Paid social ad clicks raise Non-hand-raiser lead -> Hand-raiser.
     2. Event attendance raises SQL -> Opportunity.
     3. An engaged Finance contact raises Opportunity -> Closed won.
+  Confounders: advance rates fall over time, Enterprise moves slower, events start two months in.
   No effect (the view must NOT report these):
     4. Web visits, at every step.
     5. Marketing emails that were sent but not engaged with ("Reached" only).
@@ -21,8 +22,8 @@ from datetime import date, timedelta
 
 AS_OF = date(2026, 11, 15)
 HISTORY_DAYS = 180              # six months of touches
-N_ACCOUNTS = 1000
-N_HOLDOUT = 100                 # target accounts set aside, no ABM touches
+N_ACCOUNTS = 2000
+N_HOLDOUT = 200                 # target accounts set aside, no ABM touches
 SEED = 41510
 
 SEGMENTS = [("SMB", 0.4, 15000), ("Mid-market", 0.4, 45000), ("Enterprise", 0.2, 120000)]
@@ -40,6 +41,8 @@ SOURCES = ["paid search", "paid social", "organic search (SEO)", "LLM answers (A
            "organic social", "referral and partner", "direct", "sales outreach"]
 
 # Stage order. Dates per account are "first date the account reached that stage".
+SUFFIX = ["", " Inc", " Co", " Group", " Systems", " Health", " Data", " AI"]
+
 STAGES = ["nhr_lead", "hand_raiser", "sql", "opportunity", "closed_won"]
 # Mean days to advance, per step (the window the engine learns should come out near these).
 DAYS_TO_ADVANCE = {"nhr_lead": 20, "hand_raiser": 12, "sql": 18, "opportunity": 40}
@@ -72,8 +75,8 @@ def generate(seed=SEED):
 
     for i in range(N_ACCOUNTS):
         aid = f"A{i + 1:03d}"
-        while True:   # 20 x 20 x 3 = 1,200 possible names
-            name = f"{rng.choice(WORD1)}{rng.choice(WORD2)}{rng.choice(['', ' Inc', ' Co'])}"
+        while True:   # 20 x 20 x 8 = 3,200 possible names
+            name = f"{rng.choice(WORD1)}{rng.choice(WORD2)}{rng.choice(SUFFIX)}"
             if name not in names:
                 names.add(name)
                 break
@@ -138,7 +141,7 @@ def generate(seed=SEED):
                     touch(aid, someone("Champion"), when(), "sales outreach", "engaged", "meeting")
                 p = 0.55
             elif stage == "sql":
-                attended = abm and rng.random() < 0.45
+                attended = abm and day >= start + timedelta(days=60) and rng.random() < 0.6
                 if attended:
                     touch(aid, someone(), when(), "events and webinars", "engaged", "event attendance")
                 if rng.random() < 0.6:
@@ -153,6 +156,12 @@ def generate(seed=SEED):
                     touch(aid, someone("Exec"), when(), "sales outreach", "engaged", "email reply")
                 p = 0.15 + (0.40 if finance_engaged else 0.0)
 
+            # Confounders the analysis must hold fixed: advance rates fall over time (later cohorts
+            # do worse) and Enterprise moves slower. Events only start two months in, so without
+            # cohort controls they would look worse than they are.
+            p *= 1 - 0.35 * (day - start).days / HISTORY_DAYS
+            if segment == "Enterprise":
+                p *= 0.75
             if rng.random() >= p or span_end > AS_OF:
                 break
             # A few non-hand-raiser leads skip straight to SQL (rare).

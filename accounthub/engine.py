@@ -8,16 +8,29 @@ Tables (same columns as the Google Sheet template; HubSpot is read into the same
   touches:  touch_id, account_id, contact_id, date, channel, kind (engaged|reached), detail
 
 Opportunity date = first deal created; Closed won date = first won deal's close date.
+
+Rules, in one place:
+  Window     each step's window = days within which 80% of past advancing accounts advanced
+             (fallback: the sales cycle setting, else the whole time at the stage).
+  Advanced   reached any later stage within the window. Touches count from the stage date,
+             inside the window, and only before the advance.
+  Cohorts    an account counts toward a step only once its window has passed; comparisons hold
+             the cohort (month the account entered the stage) and segment fixed.
+  Caused     every channel and role is tested at once (logistic regression with segment and
+             cohort), so each is judged with the others held fixed; the holdout comparison is an
+             exact stratified test (segment x cohort). One Holm correction covers every test.
 """
 from datetime import date, timedelta
+from math import ceil
 
-from .stats import holm, logit, predict, sample_check, stratified_lift, wald_p
+from .stats import exact_stratified, holm, logit, predict, sample_check, wald_p
 
 STAGES = ["nhr_lead", "hand_raiser", "sql", "opportunity", "closed_won"]
 STAGE_LABELS = {"nhr_lead": "Non-hand-raiser lead", "hand_raiser": "Hand-raiser", "sql": "SQL",
                 "opportunity": "Opportunity", "closed_won": "Closed won"}
 DEPTHS = ["Not reached", "Reached", "Engaged"]
 COVERAGE = ["None", "1 role", "2+ roles"]
+YES = ("yes", "true", "1", "y")
 
 DEFAULTS = {
     "as_of": None,                       # default: latest date in the data
@@ -41,7 +54,7 @@ DEFAULTS = {
 
 
 def _d(s):
-    return date.fromisoformat(s) if s else None
+    return date.fromisoformat(str(s)[:10]) if s else None
 
 
 def _settings(user):
@@ -53,11 +66,11 @@ def _settings(user):
 def _prepare(tables):
     accounts = {}
     for a in tables["accounts"]:
-        if str(a.get("target", "yes")).strip().lower() not in ("yes", "true", "1", "y"):
+        if str(a.get("target", "yes")).strip().lower() not in YES:
             continue
         accounts[a["account_id"]] = {
-            "id": a["account_id"], "name": a.get("name", a["account_id"]),
-            "segment": a.get("segment") or "All", "holdout": str(a.get("holdout", "")).strip().lower() in ("yes", "true", "1", "y"),
+            "id": a["account_id"], "name": a.get("name") or a["account_id"],
+            "segment": a.get("segment") or "All", "holdout": str(a.get("holdout", "")).strip().lower() in YES,
             "source": a.get("original_source") or "", "dates": {
                 "nhr_lead": _d(a.get("nhr_lead_date")), "hand_raiser": _d(a.get("hand_raiser_date")),
                 "sql": _d(a.get("sql_date")), "opportunity": None, "closed_won": None},
@@ -81,7 +94,7 @@ def _prepare(tables):
         if t["account_id"] in accounts and t.get("date"):
             touches.setdefault(t["account_id"], []).append({
                 "date": _d(t["date"]), "channel": (t.get("channel") or "other").strip(),
-                "kind": "engaged" if t.get("kind") == "engaged" else "reached",
+                "kind": "engaged" if str(t.get("kind", "")).strip().lower() == "engaged" else "reached",
                 "role": roles.get(t.get("contact_id"), "")})
     return accounts, touches
 
@@ -93,11 +106,22 @@ def _later(a, stage):
     return min(ds) if ds else None
 
 
+def _current(a):
+    """The latest stage the account has reached."""
+    return next((st for st in reversed(STAGES) if a["dates"][st]), None)
+
+
 def _percentile(xs, q):
     """Nearest rank: the smallest value with at least q of the list at or below it."""
-    from math import ceil
     xs = sorted(xs)
     return xs[max(0, min(len(xs) - 1, ceil(q * len(xs)) - 1))]
+
+
+def _key_roles(s, stage, segment):
+    key = list(s["key_roles"].get(stage, []))
+    if segment == s["enterprise_segment"]:
+        key += [r for r in s["enterprise_extra_roles"].get(stage, []) if r not in key]
+    return key
 
 
 def analyze(tables, settings=None):
@@ -105,89 +129,112 @@ def analyze(tables, settings=None):
     accounts, touches = _prepare(tables)
     all_dates = [t["date"] for ts in touches.values() for t in ts] + \
         [d for a in accounts.values() for d in a["dates"].values() if d]
+    if not all_dates:
+        raise ValueError("No dates found: give stage dates, deals or touches.")
     as_of = _d(s["as_of"]) if s["as_of"] else max(all_dates)
     history_start = min((t["date"] for ts in touches.values() for t in ts), default=as_of)
     non_mkt = set(s["non_marketing_channels"])
 
-    # Value of each stage in pipeline $: share that become an Opportunity x average Opportunity.
     opp_amounts = [a["pipeline"] for a in accounts.values() if a["dates"]["opportunity"]]
     avg_opp = sum(opp_amounts) / len(opp_amounts) if opp_amounts else 0.0
     won_amounts = [a["won"] for a in accounts.values() if a["dates"]["closed_won"]]
     avg_won = sum(won_amounts) / len(won_amounts) if won_amounts else 0.0
 
-    steps, windows = [], {}
-    for i, frm in enumerate(STAGES[:-1]):
-        to = STAGES[i + 1]
+    windows, wsources = {}, {}
+    for frm in STAGES[:-1]:
         durations = [(_later(a, frm) - a["dates"][frm]).days for a in accounts.values()
                      if a["dates"][frm] and _later(a, frm)]
         if len(durations) >= s["min_history_for_window"]:
-            window, wsource = max(1, _percentile(durations, s["window_percentile"])), "history"
+            windows[frm], wsources[frm] = max(1, _percentile(durations, s["window_percentile"])), "history"
         elif s["sales_cycle_days"]:
-            window, wsource = int(s["sales_cycle_days"]), "sales cycle setting"
+            windows[frm], wsources[frm] = int(s["sales_cycle_days"]), "sales cycle setting"
         else:
-            window, wsource = None, "whole time at the stage"
-        windows[frm] = window
-        steps.append(_step(frm, to, window, wsource, accounts, touches, s, as_of, history_start, non_mkt))
+            windows[frm], wsources[frm] = None, "whole time at the stage"
 
-    # One correction across every channel and role test in the report, so the chance of any
-    # false "lift" anywhere stays at alpha.
-    pairs = [(stp, r) for stp in steps for r in stp["incremental"]["channels"] + stp["incremental"]["roles"]]
-    for (stp, r), pa in zip(pairs, holm([r["p"] for _, r in pairs])):
+    steps = [_step(frm, STAGES[i + 1], windows[frm], wsources[frm], accounts, touches, s, as_of, history_start, non_mkt)
+             for i, frm in enumerate(STAGES[:-1])]
+
+    # Value of each stage in pipeline $: share that become an Opportunity x average Opportunity.
+    # An account counts once it has had time to reach Opportunity (every window up to it has passed).
+    value = {"opportunity": avg_opp, "closed_won": avg_won}
+    for i, st in enumerate(STAGES[:3]):
+        span = [windows[x] for x in STAGES[i:3]]
+        wait = sum(span) if all(span) else None
+        matured = [a for a in accounts.values() if a["dates"][st]
+                   and (wait is None or a["dates"][st] + timedelta(days=wait) <= as_of)]
+        value[st] = (sum(1 for a in matured if a["dates"]["opportunity"]) / len(matured) * avg_opp) if matured else 0.0
+
+    headline = _headline(accounts, steps, non_mkt, s)
+
+    # One Holm correction across every test in the report: channels, roles, and holdout tests.
+    tests = [(stp, r) for stp in steps for r in stp["incremental"]["channels"] + stp["incremental"]["roles"]]
+    tests += [(stp, stp["incremental"]["program"]) for stp in steps if stp["incremental"]["program"]]
+    if headline["_holdout_test"]:
+        tests.append((None, headline["_holdout_test"]))
+    m = max(1, len(tests))
+    for (stp, r), pa in zip(tests, holm([r["p"] for _, r in tests])):
         r["p_adjusted"] = pa
-        enough, more = sample_check(r["lift"], r["rate_control"], r["n_exposed"], r["n_control"], s["alpha"], s["power"])
-        r["status"] = _status(pa, r["lift"], enough, more, stp["eligible"], s)
+        enough, more = sample_check(r["lift"], r["rate_control"], r["n_exposed"], r["n_control"], s["alpha"] / m, s["power"])
+        n_now = stp["eligible"] if stp else r["n_exposed"] + r["n_control"]
+        r["status"] = _status(pa, r["lift"], enough, more, n_now, s)
         r["more_accounts_needed"] = more if r["status"] == "not enough data yet" else 0
         r["extra_advances"] = r["lift"] * r["n_exposed"] if r["status"] == "lift" else 0.0
-        r["label"] = "estimated"
-        if "role" in r and r["status"] == "lift":
+        if stp and "role" in r and r["status"] == "lift":
             stp["suggested_key_roles"].append(r["role"])
 
-    value = {}
-    for st in STAGES:
-        if st == "opportunity":
-            value[st] = avg_opp
-        elif st == "closed_won":
-            value[st] = avg_won
-        else:
-            matured = [a for a in accounts.values() if a["dates"][st]
-                       and (windows.get(st) is None or a["dates"][st] + timedelta(days=windows[st]) <= as_of)]
-            reached_opp = sum(1 for a in matured if a["dates"]["opportunity"])
-            value[st] = (reached_opp / len(matured) * avg_opp) if matured else 0.0
-
-    # Extra advances x value of the stage reached = incremental pipeline $ (per channel).
     for stp in steps:
         for row in stp["incremental"]["channels"] + stp["incremental"]["roles"]:
             row["value"] = row["extra_advances"] * value[stp["to"]] if row["status"] == "lift" else 0.0
             cost = s["channel_costs"].get(row.get("channel")) if "channel" in row else None
             row["cost"] = cost
             row["cost_per_extra_advance"] = (cost / row["extra_advances"]) if cost and row["status"] == "lift" and row["extra_advances"] > 0 else None
+        prog = stp["incremental"]["program"]
+        if prog:
+            prog["value"] = prog["extra_advances"] * value[stp["to"]] if prog["status"] == "lift" else 0.0
         for row in stp["influenced"]["channels"] + stp["influenced"]["roles"]:
             row["pipeline"] = row["credited_advances"] * value[stp["to"]]
 
+    _finish_headline(headline, steps, non_mkt, value)
+
+    # Caused by marketing, per stage reached (estimated): extra advances into it from marketing channels.
+    caused_into = {stp["to"]: sum(r["value"] for r in stp["incremental"]["channels"] if r["channel"] not in non_mkt)
+                   for stp in steps}
+    touched_ids = headline["touched_by_marketing"]["account_ids_any"]
     funnel = []
     for st in STAGES:
         reached = [a for a in accounts.values() if a["dates"][st]]
         stp = next((x for x in steps if x["from"] == st), None)
-        funnel.append({"stage": st, "label": STAGE_LABELS[st], "accounts": len(reached),
-                       "advance_rate": stp["rate"] if stp else None,
-                       "eligible": stp["eligible"] if stp else None,
-                       "value": value[st], "account_ids": [a["id"] for a in reached]})
+        funnel.append({
+            "stage": st, "label": STAGE_LABELS[st], "accounts": len(reached),
+            "advance_rate": stp["rate"] if stp else None, "judged": stp["eligible"] if stp else None,
+            "value": value[st],
+            "pipeline": sum(a["pipeline"] for a in reached),
+            "started_by_marketing": sum(a["pipeline"] for a in reached if a["source"] and a["source"] not in non_mkt),
+            "touched_by_marketing": sum(a["pipeline"] for a in reached if a["id"] in touched_ids),
+            "caused_by_marketing": caused_into.get(st, 0.0),
+            "won": sum(a["won"] for a in reached),
+            "account_ids": [a["id"] for a in reached],
+            "judged_ids": [r["account_id"] for r in stp["accounts"]] if stp else [],
+        })
 
-    headline = _headline(accounts, touches, steps, non_mkt, s)
-    gaps = [g for stp in steps for g in stp.pop("_gaps")]
     sourced = {}
     for a in accounts.values():
         if a["source"] and a["source"] not in non_mkt:
-            row = sourced.setdefault(a["source"], {"channel": a["source"], "accounts": 0, "opportunities": 0, "pipeline": 0.0, "won": 0.0})
+            row = sourced.setdefault(a["source"], {"channel": a["source"], "accounts": 0, "opportunities": 0,
+                                                   "pipeline": 0.0, "won": 0.0, "account_ids": []})
             row["accounts"] += 1
             row["opportunities"] += 1 if a["dates"]["opportunity"] else 0
             row["pipeline"] += a["pipeline"]
             row["won"] += a["won"]
+            row["account_ids"].append(a["id"])
 
+    gaps = _gaps(accounts, touches, s, as_of)
+    del headline["_holdout_test"]
+    headline["touched_by_marketing"].pop("account_ids_any")
     return {
         "tool": "Account Hub", "version": 1, "as_of": as_of.isoformat(),
         "touch_history_start": history_start.isoformat(),
-        "settings": {k: v for k, v in s.items()},
+        "settings": s,
         "headline": headline,
         "funnel": funnel,
         "steps": steps,
@@ -195,7 +242,7 @@ def analyze(tables, settings=None):
         "gaps": gaps,
         "accounts": [{"account_id": a["id"], "name": a["name"], "segment": a["segment"],
                       "holdout": a["holdout"], "original_source": a["source"],
-                      "stage": next((STAGE_LABELS[st] for st in reversed(STAGES) if a["dates"][st]), ""),
+                      "stage": STAGE_LABELS.get(_current(a), ""),
                       "pipeline": a["pipeline"], "won": a["won"],
                       "dates": {k: (v.isoformat() if v else None) for k, v in a["dates"].items()}}
                      for a in sorted(accounts.values(), key=lambda a: a["name"])],
@@ -209,28 +256,25 @@ def _step(frm, to, window, wsource, accounts, touches, s, as_of, history_start, 
         if not start or start < history_start:
             continue                      # no touch history covers this account's window
         if window and start + timedelta(days=window) > as_of:
-            continue                      # window not over yet: too early to judge (cohort rule)
+            continue                      # window not over yet: too early to judge
         adv = _later(a, frm)
-        advanced = adv is not None and adv <= as_of
-        end = start + timedelta(days=window) if window else as_of + timedelta(days=1)
-        if advanced and adv < end:
-            end = adv
+        limit = start + timedelta(days=window) if window else as_of   # last day that counts
+        advanced = adv is not None and adv <= limit
+        end = adv if advanced else limit + timedelta(days=1)          # touches before the advance
         in_window = [t for t in touches.get(a["id"], []) if start <= t["date"] < end]
-        key = list(s["key_roles"].get(frm, []))
-        if a["segment"] == s["enterprise_segment"]:
-            key += s["enterprise_extra_roles"].get(frm, [])
+        key = _key_roles(s, frm, a["segment"])
         engaged = [t for t in in_window if t["kind"] == "engaged"]
         roles_engaged = sorted({t["role"] for t in engaged if t["role"]})
         covered = [r for r in key if r in roles_engaged]
-        depth = "Engaged" if engaged else ("Reached" if in_window else "Not reached")
-        cov = "None" if not covered else ("1 role" if len(covered) == 1 else "2+ roles")
         rows.append({"account_id": a["id"], "name": a["name"], "segment": a["segment"], "holdout": a["holdout"],
-                     "advanced": advanced, "depth": depth, "coverage": cov,
+                     "cohort": start.strftime("%Y-%m"), "advanced": advanced,
+                     "depth": "Engaged" if engaged else ("Reached" if in_window else "Not reached"),
+                     "coverage": "None" if not covered else ("1 role" if len(covered) == 1 else "2+ roles"),
                      "channels_engaged": sorted({t["channel"] for t in engaged}),
                      "channels_reached_only": sorted({t["channel"] for t in in_window if t["kind"] == "reached"} - {t["channel"] for t in engaged}),
                      "roles_engaged": roles_engaged, "key_roles": key,
                      "missing_roles": [r for r in key if r not in roles_engaged],
-                     "_engaged": engaged})
+                     "_engaged": engaged, "_won": a["won"]})
 
     n = len(rows)
     adv_n = sum(r["advanced"] for r in rows)
@@ -242,87 +286,82 @@ def _step(frm, to, window, wsource, accounts, touches, s, as_of, history_start, 
             grid.append({"depth": dpt, "coverage": cov, "accounts": len(cell), "advanced": k,
                          "rate": (k / len(cell)) if cell else None, "account_ids": [r["account_id"] for r in cell]})
 
-    # Touched by marketing (influenced): equal credit to every engaged marketing touch.
-    ch_credit, role_credit = {}, {}
+    # Touched by marketing (influenced): an advance gives equal credit to every engaged
+    # marketing touch in its window. Credit, not proof.
+    ch, rl = {}, {}
+    touched = []
     for r in rows:
-        if not r["advanced"]:
-            continue
         mk = [t for t in r["_engaged"] if t["channel"] not in non_mkt]
+        if not r["advanced"] or not mk:
+            continue
+        touched.append(r["account_id"])
         for t in mk:
-            ch_credit[t["channel"]] = ch_credit.get(t["channel"], 0) + 1 / len(mk)
-        eng_roles = [t["role"] for t in r["_engaged"] if t["role"]]
-        for role in eng_roles:
-            role_credit[role] = role_credit.get(role, 0) + 1 / len(eng_roles)
-    influenced = {
-        "channels": [{"channel": c, "credited_advances": v} for c, v in sorted(ch_credit.items(), key=lambda x: -x[1])],
-        "roles": [{"role": c, "credited_advances": v} for c, v in sorted(role_credit.items(), key=lambda x: -x[1])],
-        "influenced_advances": sum(1 for r in rows if r["advanced"] and any(t["channel"] not in non_mkt for t in r["_engaged"])),
-    }
+            row = ch.setdefault(t["channel"], {"channel": t["channel"], "credited_advances": 0.0, "won": 0.0, "account_ids": set()})
+            row["credited_advances"] += 1 / len(mk)
+            row["won"] += r["_won"] / len(mk)
+            row["account_ids"].add(r["account_id"])
+        with_role = [t for t in mk if t["role"]]
+        for t in with_role:
+            row = rl.setdefault(t["role"], {"role": t["role"], "credited_advances": 0.0, "won": 0.0, "account_ids": set()})
+            row["credited_advances"] += 1 / len(with_role)
+            row["won"] += r["_won"] / len(with_role)
+            row["account_ids"].add(r["account_id"])
+    fix = lambda d: [{**v, "account_ids": sorted(v["account_ids"])} for v in sorted(d.values(), key=lambda v: -v["credited_advances"])]
+    influenced = {"channels": fix(ch), "roles": fix(rl), "influenced_advances": len(touched), "account_ids": touched}
 
-    # Caused by marketing (incremental): exposed vs not, within segment, target accounts.
+    # Caused by marketing (incremental): every channel and role in one logistic regression with
+    # segment and cohort, so each is judged with the others held fixed.
     tests = []
-    channels = sorted({c for r in rows for c in r["channels_engaged"] + r["channels_reached_only"]})
-    for c in channels:
+    for c in sorted({c for r in rows for c in r["channels_engaged"] + r["channels_reached_only"]}):
         tests.append(("channel", c, "engaged", lambda r, c=c: c in r["channels_engaged"]))
         if any(c in r["channels_reached_only"] for r in rows):
             tests.append(("channel", c, "reached only", lambda r, c=c: c in r["channels_reached_only"]))
     for role in sorted({x for r in rows for x in r["roles_engaged"]}):
         tests.append(("role", role, "engaged", lambda r, role=role: role in r["roles_engaged"]))
-    # Each factor is tested while holding the others fixed (logistic regression on every
-    # channel and role at once, plus segment). Without this, a role looks like it works
-    # just because that person also clicked the ad that did the work.
     segments = sorted({r["segment"] for r in rows})
+    cohorts = sorted({r["cohort"] for r in rows})
     results = []
     usable = [t for t in tests if 0 < sum(1 for r in rows if t[3](r)) < len(rows)]
     if rows and usable and 0 < adv_n < len(rows):
+        base = len(segments) + len(cohorts) - 1
+
         def design(r, override=None):
-            x = [1.0] + [1.0 if r["segment"] == seg else 0.0 for seg in segments[1:]]
+            x = [1.0] + [1.0 if r["segment"] == g else 0.0 for g in segments[1:]] + \
+                [1.0 if r["cohort"] == c else 0.0 for c in cohorts[1:]]
             for idx, t in enumerate(usable):
                 x.append(override[1] if override and override[0] == idx else (1.0 if t[3](r) else 0.0))
             return x
-        X = [design(r) for r in rows]
-        y = [1.0 if r["advanced"] else 0.0 for r in rows]
-        coef, se = logit(X, y)
-        off = len(segments)
+        coef, se = logit([design(r) for r in rows], [1.0 if r["advanced"] else 0.0 for r in rows])
         for idx, (kind, name, exposure, fn) in enumerate(usable):
             exposed = [r for r in rows if fn(r)]
-            if exposure == "reached only":
+            if exposure == "reached only":   # compare with accounts this channel never touched
                 control = [r for r in rows if name not in r["channels_engaged"] and name not in r["channels_reached_only"]]
             else:
                 control = [r for r in rows if not fn(r)]
             # Lift in points: for the exposed accounts, modeled advance rate with vs without it.
             lift = sum(predict(coef, design(r, (idx, 1.0))) - predict(coef, design(r, (idx, 0.0))) for r in exposed) / len(exposed)
-            results.append({kind: name, "exposure": exposure, "lift": lift,
-                            "p": wald_p(coef[off + idx], se[off + idx]),
+            results.append({kind: name, "exposure": exposure, "lift": lift, "p": wald_p(coef[base + idx], se[base + idx]),
                             "n_exposed": len(exposed), "n_control": len(control),
                             "rate_exposed": sum(r["advanced"] for r in exposed) / len(exposed),
-                            "rate_control": (sum(r["advanced"] for r in control) / len(control)) if control else 0.0})
+                            "rate_control": (sum(r["advanced"] for r in control) / len(control)) if control else 0.0,
+                            "label": "estimated", "exposed_ids": [r["account_id"] for r in exposed]})
 
-    # Program-level test against the holdout list, when there is one.
+    # Program vs holdout list, exact, within segment x cohort.
     program = None
     if any(r["holdout"] for r in rows) and any(not r["holdout"] for r in rows):
         strata = []
-        for seg in segments:
-            ex = [r for r in rows if r["segment"] == seg and not r["holdout"]]
-            co = [r for r in rows if r["segment"] == seg and r["holdout"]]
-            strata.append((len(ex), sum(r["advanced"] for r in ex), len(co), sum(r["advanced"] for r in co)))
-        program = stratified_lift(strata)
+        for g in segments:
+            for c in cohorts:
+                ex = [r for r in rows if r["segment"] == g and r["cohort"] == c and not r["holdout"]]
+                co = [r for r in rows if r["segment"] == g and r["cohort"] == c and r["holdout"]]
+                strata.append((len(ex), sum(r["advanced"] for r in ex), len(co), sum(r["advanced"] for r in co)))
+        program = exact_stratified(strata)
         if program:
-            enough, more = sample_check(program["lift"], program["rate_control"], program["n_exposed"], program["n_control"], s["alpha"], s["power"])
-            program["status"] = _status(program["p"], program["lift"], enough, more, n, s)
-            program["more_accounts_needed"] = more if program["status"] == "not enough data yet" else 0
             program["label"] = "tested against holdout"
+            program["exposed_ids"] = [r["account_id"] for r in rows if not r["holdout"]]
 
-
-    gaps = []
     for r in rows:
-        if not r["advanced"]:
-            for role in r["missing_roles"]:
-                gaps.append({"account_id": r["account_id"], "name": r["name"], "step": f"{STAGE_LABELS[frm]} → {STAGE_LABELS[to]}",
-                             "missing_role": role})
-    for r in rows:
-        del r["_engaged"]
-
+        del r["_engaged"], r["_won"]
     return {"from": frm, "to": to, "step": f"{frm}->{to}",
             "label": f"{STAGE_LABELS[frm]} → {STAGE_LABELS[to]}",
             "window_days": window, "window_source": wsource,
@@ -331,7 +370,27 @@ def _step(frm, to, window, wsource, accounts, touches, s, as_of, history_start, 
             "incremental": {"program": program,
                             "channels": [r for r in results if "channel" in r],
                             "roles": [r for r in results if "role" in r]},
-            "suggested_key_roles": [], "accounts": rows, "_gaps": gaps}
+            "suggested_key_roles": [], "accounts": rows}
+
+
+def _gaps(accounts, touches, s, as_of):
+    """Every target account still in play (not holdout, not yet won), at its current stage:
+    the key roles for its next step that haven't engaged since it reached that stage. This is the
+    to-do list the Activations tab works from."""
+    out = []
+    for a in sorted(accounts.values(), key=lambda a: a["name"]):
+        cur = _current(a)
+        if a["holdout"] or cur in (None, "closed_won"):
+            continue
+        since = a["dates"][cur]
+        engaged = {t["role"] for t in touches.get(a["id"], []) if t["kind"] == "engaged" and t["role"] and since <= t["date"] <= as_of}
+        nxt = STAGES[STAGES.index(cur) + 1]
+        for role in _key_roles(s, cur, a["segment"]):
+            if role not in engaged:
+                out.append({"account_id": a["id"], "name": a["name"], "segment": a["segment"],
+                            "stage": STAGE_LABELS[cur], "step": f"{STAGE_LABELS[cur]} → {STAGE_LABELS[nxt]}",
+                            "missing_role": role, "days_at_stage": (as_of - since).days})
+    return out
 
 
 def _status(p, lift, enough, more, n, s):
@@ -345,45 +404,51 @@ def _status(p, lift, enough, more, n, s):
     return "not enough data yet"
 
 
-def _headline(accounts, touches, steps, non_mkt, s):
+def _headline(accounts, steps, non_mkt, s):
     opp = [a for a in accounts.values() if a["dates"]["opportunity"]]
     won = [a for a in accounts.values() if a["dates"]["closed_won"]]
     sourced = [a for a in opp if a["source"] and a["source"] not in non_mkt]
-    influenced = []
-    for a in opp:
-        before = [t for t in touches.get(a["id"], []) if t["kind"] == "engaged"
-                  and t["channel"] not in non_mkt and t["date"] < a["dates"]["opportunity"]]
-        if before:
-            influenced.append(a)
-    incr_value = sum(r["value"] for stp in steps for r in stp["incremental"]["channels"])
-    # Holdout: share of accounts that became an Opportunity, program vs holdout, within segment.
-    holdout_view = None
+    # Touched: the account advanced on its way to Opportunity with an engaged marketing touch
+    # in that step's window.
+    touched_any = {i for stp in steps if stp["to"] in ("hand_raiser", "sql", "opportunity") for i in stp["influenced"]["account_ids"]}
+    touched = [a for a in opp if a["id"] in touched_any]
+    # Holdout: share of accounts that became an Opportunity, program vs holdout, exact, within segment.
+    test = None
     if any(a["holdout"] for a in accounts.values()) and any(not a["holdout"] for a in accounts.values()):
-        segs = sorted({a["segment"] for a in accounts.values()})
         strata = []
-        for seg in segs:
-            ex = [a for a in accounts.values() if a["segment"] == seg and not a["holdout"]]
-            co = [a for a in accounts.values() if a["segment"] == seg and a["holdout"]]
-            strata.append((len(ex), sum(1 for a in ex if a["dates"]["opportunity"]),
-                           len(co), sum(1 for a in co if a["dates"]["opportunity"])))
-        test = stratified_lift(strata)
+        for g in sorted({a["segment"] for a in accounts.values()}):
+            ex = [a for a in accounts.values() if a["segment"] == g and not a["holdout"]]
+            co = [a for a in accounts.values() if a["segment"] == g and a["holdout"]]
+            strata.append((len(ex), sum(1 for a in ex if a["dates"]["opportunity"]), len(co), sum(1 for a in co if a["dates"]["opportunity"])))
+        test = exact_stratified(strata)
         if test:
-            enough, more = sample_check(test["lift"], test["rate_control"], test["n_exposed"], test["n_control"], s["alpha"], s["power"])
-            status = _status(test["p"], test["lift"], enough, more, test["n_exposed"] + test["n_control"], s)
-            avg_opp = (sum(a["pipeline"] for a in opp) / len(opp)) if opp else 0.0
-            holdout_view = {**test, "status": status,
-                            "more_accounts_needed": more if status == "not enough data yet" else 0,
-                            "incremental_pipeline": test["lift"] * test["n_exposed"] * avg_opp if status == "lift" else 0.0}
+            test["exposed_ids"] = [a["id"] for a in accounts.values() if not a["holdout"]]
+    ids = lambda xs: [a["id"] for a in xs]
     return {
-        "pipeline_total": sum(a["pipeline"] for a in opp),
-        "won_total": sum(a["won"] for a in won),
-        "opportunities": len(opp), "closed_won": len(won),
-        "win_rate": (len(won) / len(opp)) if opp else None,
+        "pipeline_total": sum(a["pipeline"] for a in opp), "won_total": sum(a["won"] for a in won),
+        "opportunities": len(opp), "closed_won": len(won), "win_rate": (len(won) / len(opp)) if opp else None,
+        "opportunity_ids": ids(opp), "won_ids": ids(won),
         "started_by_marketing": {"opportunities": len(sourced), "pipeline": sum(a["pipeline"] for a in sourced),
-                                 "won": sum(a["won"] for a in sourced)},
-        "touched_by_marketing": {"opportunities": len(influenced), "pipeline": sum(a["pipeline"] for a in influenced),
-                                 "won": sum(a["won"] for a in influenced)},
-        "caused_by_marketing": ({"pipeline": holdout_view["incremental_pipeline"], "label": "tested against holdout",
-                                 "status": holdout_view["status"], "holdout": holdout_view} if holdout_view else
-                                {"pipeline": incr_value, "label": "estimated", "status": "lift" if incr_value > 0 else "no lift found", "holdout": None}),
+                                 "won": sum(a["won"] for a in sourced), "account_ids": ids(sourced)},
+        "touched_by_marketing": {"opportunities": len(touched), "pipeline": sum(a["pipeline"] for a in touched),
+                                 "won": sum(a["won"] for a in touched), "account_ids": ids(touched),
+                                 "account_ids_any": touched_any},
+        "_holdout_test": test,
     }
+
+
+def _finish_headline(h, steps, non_mkt, value):
+    test = h["_holdout_test"]
+    if test:
+        test["incremental_pipeline"] = test["lift"] * test["n_exposed"] * value["opportunity"] if test["status"] == "lift" else 0.0
+        h["caused_by_marketing"] = {"pipeline": test["incremental_pipeline"], "label": "tested against holdout",
+                                    "status": test["status"], "holdout": {k: v for k, v in test.items() if k != "exposed_ids"},
+                                    "account_ids": test["exposed_ids"] if test["status"] == "lift" else []}
+        return
+    # No holdout: marketing channels' extra advances on the way to Opportunity, each valued at the
+    # pipeline its stage is worth. Estimated.
+    rows = [(stp, r) for stp in steps if stp["to"] in ("hand_raiser", "sql", "opportunity")
+            for r in stp["incremental"]["channels"] if r["channel"] not in non_mkt and r["status"] == "lift"]
+    total = sum(r["value"] for _, r in rows)
+    h["caused_by_marketing"] = {"pipeline": total, "label": "estimated", "status": "lift" if total > 0 else "no lift found",
+                                "holdout": None, "account_ids": sorted({i for _, r in rows for i in r["exposed_ids"]})}

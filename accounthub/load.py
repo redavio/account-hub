@@ -37,7 +37,7 @@ def add_extra_touches(tables, extra):
             continue
         tables["touches"].append({"touch_id": t.get("touch_id") or f"X{i + 1}", "account_id": account,
                                   "contact_id": t.get("contact_id") or (contact["contact_id"] if contact else ""),
-                                  "date": t["date"], "channel": t["channel"], "kind": t.get("kind") or "engaged",
+                                  "date": t["date"], "channel": t["channel"], "kind": t.get("kind") or "reached",
                                   "detail": t.get("detail", "")})
     return unmatched
 

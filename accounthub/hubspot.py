@@ -113,6 +113,10 @@ def read(token, settings=None):
     companies = hs.all("companies", ["name", "domain", "hs_analytics_source", props["target"], props["holdout"],
                                      props["segment"], props["nhr_lead_date"], props["hand_raiser_date"], props["sql_date"]])
     has_target = any(c["properties"].get(props["target"]) not in (None, "") for c in companies)
+    if not has_target and props["target"]:
+        raise SystemExit(f"No company has the target-list property '{props['target']}' set. Mark your ABM target "
+                         "accounts in HubSpot, point settings hubspot.target at the property you use, or set it "
+                         "to \"\" to analyze every company.")
     accounts = [{
         "account_id": c["id"], "name": c["properties"].get("name") or c["id"],
         "domain": c["properties"].get("domain") or "",
