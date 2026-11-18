@@ -1,0 +1,22 @@
+{
+  "key_roles": {
+    "nhr_lead": ["Champion"],
+    "hand_raiser": ["Champion"],
+    "sql": ["Champion", "Exec"],
+    "opportunity": ["Exec", "Finance"]
+  },
+  "enterprise_extra_roles": { "opportunity": ["Security"] },
+  "enterprise_segment": "Enterprise",
+  "sales_cycle_days": null,
+  "non_marketing_channels": ["sales outreach", "direct"],
+  "channel_costs": { "paid social": 60000, "events and webinars": 40000 },
+  "hubspot": {
+    "target": "account_hub_target",
+    "holdout": "account_hub_holdout",
+    "segment": "account_hub_segment",
+    "role": "account_hub_role",
+    "nhr_lead_date": "hs_v2_date_entered_lead",
+    "hand_raiser_date": "hs_v2_date_entered_marketingqualifiedlead",
+    "sql_date": "hs_v2_date_entered_salesqualifiedlead"
+  }
+}

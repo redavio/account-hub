@@ -1,4 +1,4 @@
-"""ABM Analyzer engine: four tables in, one results file out.
+"""Account Hub engine: four tables in, one results file out.
 
 Tables (same columns as the Google Sheet template; HubSpot is read into the same shape):
   accounts: account_id, name, segment, target, holdout, original_source,
@@ -32,7 +32,7 @@ DEFAULTS = {
     "sales_cycle_days": None,            # window fallback when history is too thin
     "window_percentile": 0.8,
     "min_history_for_window": 5,         # advancing accounts needed to read a percentile at all
-    "non_marketing_channels": ["sales outreach"],
+    "non_marketing_channels": ["sales outreach", "direct"],  # not credited to marketing
     "channel_costs": {},                 # channel -> cost over the period
     "alpha": 0.05,
     "power": 0.8,
@@ -185,7 +185,7 @@ def analyze(tables, settings=None):
             row["won"] += a["won"]
 
     return {
-        "tool": "ABM Analyzer", "version": 1, "as_of": as_of.isoformat(),
+        "tool": "Account Hub", "version": 1, "as_of": as_of.isoformat(),
         "touch_history_start": history_start.isoformat(),
         "settings": {k: v for k, v in s.items()},
         "headline": headline,

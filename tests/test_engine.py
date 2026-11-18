@@ -6,8 +6,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "seed"))
 
-from abm import analyze  # noqa: E402
-from abm.stats import holm, sample_check, stratified_lift  # noqa: E402
+from accounthub import analyze  # noqa: E402
+from accounthub.stats import holm, sample_check, stratified_lift  # noqa: E402
 from generate import generate  # noqa: E402
 
 TRUE = {("nhr_lead", "paid social", "engaged"), ("sql", "events and webinars", "engaged"),

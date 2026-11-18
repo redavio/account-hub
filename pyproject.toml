@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "account-hub"
+version = "1.0.0"
+description = "Account Hub: which touches and buying-committee coverage move target accounts to the next stage, and what that is worth in pipeline."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+certs = ["certifi"]
+
+[tool.setuptools]
+packages = ["accounthub"]

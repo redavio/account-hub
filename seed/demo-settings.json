@@ -1,0 +1,8 @@
+{
+  "hubspot": {
+    "nhr_lead_date": "account_hub_nhr_lead_date",
+    "hand_raiser_date": "account_hub_hand_raiser_date",
+    "sql_date": "account_hub_sql_date"
+  },
+  "channel_costs": { "paid social": 60000, "events and webinars": 40000 }
+}

@@ -35,8 +35,9 @@ WORD1 = ["North", "Blue", "Iron", "Bright", "Clear", "Quiet", "Swift", "Stone", 
          "Pine", "True", "Red", "Wide", "Calm", "Gold", "High", "Deep", "Far", "Prime"]
 WORD2 = ["Ledger", "Harbor", "Forge", "Signal", "Field", "Works", "Labs", "Grid", "Path", "Loop",
          "Bridge", "Point", "Peak", "Yard", "Cloud", "Logic", "Metric", "Stack", "Wave", "Line"]
-SOURCES = ["paid search", "paid social", "organic search (SEO)", "LLM answers (AEO)",
-           "events and webinars", "referral and partner", "review sites", "direct", "sales outreach"]
+# Original sources HubSpot can hold natively (see accounthub/hubspot.py SOURCE_MAP).
+SOURCES = ["paid search", "paid social", "organic search (SEO)", "LLM answers (AEO)", "email",
+           "organic social", "referral and partner", "direct", "sales outreach"]
 
 # Stage order. Dates per account are "first date the account reached that stage".
 STAGES = ["nhr_lead", "hand_raiser", "sql", "opportunity", "closed_won"]
@@ -76,6 +77,7 @@ def generate(seed=SEED):
             if name not in names:
                 names.add(name)
                 break
+        domain = name.lower().replace(" ", "") + ".example.com"   # example.com is reserved: never a real company
         segment, base_amount = pick_segment(rng)
         holdout = i in holdout_ids
         abm = not holdout
@@ -86,8 +88,9 @@ def generate(seed=SEED):
             n = 1 if role in ("Exec", "Champion") else (1 if rng.random() < 0.7 else 0)
             for _ in range(n):
                 cid = f"C{len(contacts) + 1:04d}"
-                contacts.append({"contact_id": cid, "account_id": aid,
-                                 "name": f"{rng.choice(FIRST)} {rng.choice(LAST)}", "role": role})
+                first, last = rng.choice(FIRST), rng.choice(LAST)
+                contacts.append({"contact_id": cid, "account_id": aid, "name": f"{first} {last}",
+                                 "email": f"{first.lower()}.{last.lower()}.{cid.lower()}@{domain}", "role": role})
                 people.append((cid, role))
         by_role = {}
         for cid, role in people:
@@ -167,7 +170,7 @@ def generate(seed=SEED):
                           "close_date": dates["closed_won"] if won else ""})
 
         source = rng.choice(SOURCES)
-        accounts.append({"account_id": aid, "name": name, "segment": segment, "target": "yes",
+        accounts.append({"account_id": aid, "name": name, "domain": domain, "segment": segment, "target": "yes",
                          "holdout": "yes" if holdout else "no", "original_source": source,
                          "nhr_lead_date": dates["nhr_lead"], "hand_raiser_date": dates["hand_raiser"],
                          "sql_date": dates["sql"]})
