@@ -70,6 +70,12 @@ class HubSpot:
                     time.sleep(2 ** attempt)
                     continue
                 raise RuntimeError(f"HubSpot {method} {path}: {e.code} {e.read().decode()[:400]}") from None
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                # A slow page or a dropped connection: wait and try again, like a rate limit.
+                if attempt < 5:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise RuntimeError(f"HubSpot {method} {path}: no answer after 6 tries ({e})") from None
         return {}
 
     def all(self, obj, props, associations=None):
