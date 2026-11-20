@@ -75,6 +75,9 @@ export interface Account {
 
 export interface Results {
   tool: string;
+  version: number;
+  /** The engine settings this run used (key roles, windows, segments). */
+  settings: Record<string, unknown>;
   as_of: string;
   touch_history_start: string;
   headline: {
